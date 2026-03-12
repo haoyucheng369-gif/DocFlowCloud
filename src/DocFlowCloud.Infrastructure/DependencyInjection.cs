@@ -25,6 +25,8 @@ public static class DependencyInjection
         services.AddSingleton(rabbitMqSettings);
         services.AddScoped<IJobRepository, JobRepository>();
         services.AddScoped<IJobMessagePublisher, RabbitMqJobMessagePublisher>();
+        services.AddScoped<IInboxMessageRepository, InboxMessageRepository>();
+        services.AddScoped<IOutboxMessageRepository, OutboxMessageRepository>();
 
         return services;
     }

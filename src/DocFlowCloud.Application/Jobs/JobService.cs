@@ -1,91 +1,123 @@
 ﻿using DocFlowCloud.Application.Abstractions.Messaging;
 using DocFlowCloud.Application.Abstractions.Persistence;
+using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Jobs;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using DocFlowCloud.Domain.Outbox;
+using System.Text.Json;
 
-namespace DocFlowCloud.Application.Jobs
+namespace DocFlowCloud.Application.Jobs;
+
+public sealed class JobService
 {
-    public class JobService
+    private readonly IJobRepository _jobRepository;
+    private readonly IOutboxMessageRepository _outboxMessageRepository;
+
+    public JobService(
+        IJobRepository jobRepository,
+        IOutboxMessageRepository outboxMessageRepository)
     {
-        private readonly IJobRepository _jobRepository;
-        private readonly IJobMessagePublisher _jobMessagePublisher;
+        _jobRepository = jobRepository;
+        _outboxMessageRepository = outboxMessageRepository;
+    }
 
-        public JobService(IJobRepository jobRepository, IJobMessagePublisher jobMessagePublisher)
+    public async Task<Guid> CreateAsync(CreateJobRequest request, CancellationToken cancellationToken = default)
+    {
+        var job = new Job(request.Name, request.Type, request.PayloadJson);
+
+        await _jobRepository.AddAsync(job, cancellationToken);
+
+        var integrationMessage = new JobCreatedIntegrationMessage
         {
-            _jobMessagePublisher = jobMessagePublisher;
-            _jobRepository = jobRepository; 
-        }
+            MessageId = Guid.NewGuid(),
+            JobId = job.Id,
+            CreatedAtUtc = DateTime.UtcNow
+        };
 
-        public async Task<Guid> CreateAsync(CreateJobRequest request, CancellationToken cancellationToken = default)
+        var payload = JsonSerializer.Serialize(integrationMessage);
+        var outboxMessage = new OutboxMessage(nameof(JobCreatedIntegrationMessage), payload);
+
+        await _outboxMessageRepository.AddAsync(outboxMessage, cancellationToken);
+
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+
+        return job.Id;
+    }
+
+    public async Task<JobDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(id, cancellationToken);
+        if (job is null) return null;
+
+        return Map(job);
+    }
+
+    public async Task<List<JobDto>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        var jobs = await _jobRepository.GetAllAsync(cancellationToken);
+        return jobs.Select(Map).ToList();
+    }
+
+    public async Task MarkProcessingAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+                  ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
+
+        job.MarkProcessing();
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkSucceededAsync(Guid jobId, string resultJson, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+                  ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
+
+        job.MarkSucceeded(resultJson);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkFailedAsync(Guid jobId, string errorMessage, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+                  ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
+
+        job.MarkFailed(errorMessage);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task RetryAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+                  ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
+
+        job.Retry();
+
+        var integrationMessage = new JobCreatedIntegrationMessage
         {
-            var job = new Job(request.Name, request.Type, request.PayloadJson);
+            MessageId = Guid.NewGuid(),
+            JobId = job.Id,
+            CreatedAtUtc = DateTime.UtcNow
+        };
 
-            await _jobRepository.AddAsync(job, cancellationToken);
-            await _jobRepository.SaveChangesAsync(cancellationToken);
+        var payload = JsonSerializer.Serialize(integrationMessage);
+        var outboxMessage = new OutboxMessage(nameof(JobCreatedIntegrationMessage), payload);
 
-            await _jobMessagePublisher.PublishJobCreatedAsync(job.Id, cancellationToken);
+        await _outboxMessageRepository.AddAsync(outboxMessage, cancellationToken);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
 
-            return job.Id;
-        }
-
-        public async Task<JobDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    private static JobDto Map(Job job)
+    {
+        return new JobDto
         {
-            var job = await _jobRepository.GetByIdAsync(id, cancellationToken);
-            if (job is null) return null;
-
-            return Map(job);
-        }
-
-        public async Task<List<JobDto>> GetAllAsync(CancellationToken cancellationToken = default)
-        {
-            var jobs = await _jobRepository.GetAllAsync(cancellationToken);
-            return jobs.Select(Map).ToList();
-        }
-
-        public async Task MarkProcessingAsync(Guid jobId, CancellationToken cancellationToken = default)
-        {
-            var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
-                      ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
-
-            job.MarkProcessing();
-            await _jobRepository.SaveChangesAsync(cancellationToken);
-        }
-
-        public async Task MarkSucceededAsync(Guid jobId, string resultJson, CancellationToken cancellationToken = default)
-        {
-            var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
-                      ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
-
-            job.MarkSucceeded(resultJson);
-            await _jobRepository.SaveChangesAsync(cancellationToken);
-        }
-
-        public async Task MarkFailedAsync(Guid jobId, string errorMessage, CancellationToken cancellationToken = default)
-        {
-            var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
-                      ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
-
-            job.MarkFailed(errorMessage);
-            await _jobRepository.SaveChangesAsync(cancellationToken);
-        }
-
-        private static JobDto Map(Job job)
-        {
-            return new JobDto
-            {
-                Id = job.Id,
-                Name = job.Name,
-                Type = job.Type,
-                Status = job.Status.ToString(),
-                RetryCount = job.RetryCount,
-                CreatedAtUtc = job.CreatedAtUtc,
-                StartedAtUtc = job.StartedAtUtc,
-                CompletedAtUtc = job.CompletedAtUtc,
-                ErrorMessage = job.ErrorMessage
-            };
-        }
-
+            Id = job.Id,
+            Name = job.Name,
+            Type = job.Type,
+            Status = job.Status.ToString(),
+            RetryCount = job.RetryCount,
+            CreatedAtUtc = job.CreatedAtUtc,
+            StartedAtUtc = job.StartedAtUtc,
+            CompletedAtUtc = job.CompletedAtUtc,
+            ErrorMessage = job.ErrorMessage
+        };
     }
 }

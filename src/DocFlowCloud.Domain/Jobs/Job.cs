@@ -53,5 +53,18 @@ namespace DocFlowCloud.Domain.Jobs
             RetryCount++;
             CompletedAtUtc = DateTime.UtcNow;
         }
+
+        public void Retry()
+        {
+            if (Status != JobStatus.Failed)
+                throw new InvalidOperationException("Only failed jobs can be retried.");
+
+            Status = JobStatus.Pending;
+            ErrorMessage = null;
+            StartedAtUtc = null;
+            CompletedAtUtc = null;
+
+            RetryCount++;
+        }
     }
 }

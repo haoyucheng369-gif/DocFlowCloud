@@ -1,21 +1,27 @@
-﻿using DocFlowCloud.Application.Jobs;
+﻿using System.Text;
+using System.Text.Json;
+using DocFlowCloud.Application.Abstractions.Persistence;
+using DocFlowCloud.Application.Jobs;
+using DocFlowCloud.Application.Messaging;
+using DocFlowCloud.Domain.Inbox;
 using DocFlowCloud.Infrastructure.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace DocFlowCloud.Worker;
 
 public sealed class RabbitMqWorker : BackgroundService
 {
+    private const string ConsumerName = "DocFlowCloud.JobConsumer";
+    private const int MaxRetryCount = 3;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RabbitMqSettings _settings;
     private readonly ILogger<RabbitMqWorker> _logger;
+
     private IConnection? _connection;
     private IModel? _channel;
 
@@ -43,11 +49,23 @@ public sealed class RabbitMqWorker : BackgroundService
         _channel = _connection.CreateModel();
 
         _channel.QueueDeclare(
-            queue: _settings.QueueName,
+            queue: _settings.DeadLetterQueueName,
             durable: true,
             exclusive: false,
             autoDelete: false,
             arguments: null);
+
+        var mainQueueArguments = new Dictionary<string, object>
+        {
+            ["x-dead-letter-routing-key"] = _settings.DeadLetterQueueName
+        };
+
+        _channel.QueueDeclare(
+            queue: _settings.QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: mainQueueArguments);
 
         _channel.BasicQos(prefetchSize: 0, prefetchCount: 1, global: false);
 
@@ -72,11 +90,24 @@ public sealed class RabbitMqWorker : BackgroundService
 
             try
             {
-                var message = JsonSerializer.Deserialize<JobCreatedMessage>(json)
+                var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json)
                               ?? throw new InvalidOperationException("Message deserialization failed.");
 
                 using var scope = _scopeFactory.CreateScope();
+                var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
                 var jobService = scope.ServiceProvider.GetRequiredService<JobService>();
+
+                var alreadyProcessed = await inboxRepository.ExistsAsync(
+                    message.MessageId,
+                    ConsumerName,
+                    stoppingToken);
+
+                if (alreadyProcessed)
+                {
+                    _logger.LogWarning("Duplicate message ignored. MessageId: {MessageId}", message.MessageId);
+                    _channel.BasicAck(eventArgs.DeliveryTag, false);
+                    return;
+                }
 
                 await jobService.MarkProcessingAsync(message.JobId, stoppingToken);
 
@@ -90,7 +121,10 @@ public sealed class RabbitMqWorker : BackgroundService
 
                 await jobService.MarkSucceededAsync(message.JobId, resultJson, stoppingToken);
 
-                _channel.BasicAck(eventArgs.DeliveryTag, multiple: false);
+                await inboxRepository.AddAsync(new InboxMessage(message.MessageId, ConsumerName), stoppingToken);
+                await inboxRepository.SaveChangesAsync(stoppingToken);
+
+                _channel.BasicAck(eventArgs.DeliveryTag, false);
 
                 _logger.LogInformation("Job {JobId} processed successfully.", message.JobId);
             }
@@ -100,20 +134,25 @@ public sealed class RabbitMqWorker : BackgroundService
 
                 try
                 {
-                    var fallbackMessage = JsonSerializer.Deserialize<JobCreatedMessage>(json);
-                    if (fallbackMessage is not null)
+                    var retryCount = GetRetryCount(eventArgs.BasicProperties);
+
+                    if (retryCount < MaxRetryCount)
                     {
-                        using var scope = _scopeFactory.CreateScope();
-                        var jobService = scope.ServiceProvider.GetRequiredService<JobService>();
-                        await jobService.MarkFailedAsync(fallbackMessage.JobId, ex.Message, stoppingToken);
+                        RepublishWithRetry(body, retryCount + 1);
+                        _logger.LogWarning("Message requeued with retry count {RetryCount}", retryCount + 1);
+                    }
+                    else
+                    {
+                        PublishToDeadLetter(body);
+                        _logger.LogError("Message moved to DLQ after max retry.");
                     }
                 }
-                catch (Exception innerEx)
+                catch (Exception retryEx)
                 {
-                    _logger.LogError(innerEx, "Failed to mark job as failed.");
+                    _logger.LogError(retryEx, "Failed during retry/DLQ handling.");
                 }
 
-                _channel.BasicNack(eventArgs.DeliveryTag, multiple: false, requeue: false);
+                _channel?.BasicAck(eventArgs.DeliveryTag, false);
             }
         };
 
@@ -127,6 +166,55 @@ public sealed class RabbitMqWorker : BackgroundService
         return Task.CompletedTask;
     }
 
+    private int GetRetryCount(IBasicProperties? properties)
+    {
+        if (properties?.Headers is null)
+            return 0;
+
+        if (!properties.Headers.TryGetValue("x-retry-count", out var value))
+            return 0;
+
+        if (value is byte[] bytes && int.TryParse(Encoding.UTF8.GetString(bytes), out var parsed))
+            return parsed;
+
+        if (value is int intValue)
+            return intValue;
+
+        return 0;
+    }
+
+    private void RepublishWithRetry(byte[] body, int retryCount)
+    {
+        if (_channel is null) return;
+
+        var properties = _channel.CreateBasicProperties();
+        properties.Persistent = true;
+        properties.Headers = new Dictionary<string, object>
+        {
+            ["x-retry-count"] = retryCount.ToString()
+        };
+
+        _channel.BasicPublish(
+            exchange: string.Empty,
+            routingKey: _settings.QueueName,
+            basicProperties: properties,
+            body: body);
+    }
+
+    private void PublishToDeadLetter(byte[] body)
+    {
+        if (_channel is null) return;
+
+        var properties = _channel.CreateBasicProperties();
+        properties.Persistent = true;
+
+        _channel.BasicPublish(
+            exchange: string.Empty,
+            routingKey: _settings.DeadLetterQueueName,
+            basicProperties: properties,
+            body: body);
+    }
+
     public override void Dispose()
     {
         _channel?.Close();
@@ -134,11 +222,5 @@ public sealed class RabbitMqWorker : BackgroundService
         _channel?.Dispose();
         _connection?.Dispose();
         base.Dispose();
-    }
-
-    private sealed class JobCreatedMessage
-    {
-        [JsonPropertyName("jobId")]
-        public Guid JobId { get; set; }
     }
 }

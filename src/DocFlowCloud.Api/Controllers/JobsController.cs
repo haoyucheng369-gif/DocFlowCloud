@@ -36,4 +36,12 @@ public sealed class JobsController : ControllerBase
         var jobs = await _jobService.GetAllAsync(cancellationToken);
         return Ok(jobs);
     }
+
+    [HttpPost("{id:guid}/retry")]
+    public async Task<IActionResult> Retry(Guid id, CancellationToken cancellationToken)
+    {
+        await _jobService.RetryAsync(id, cancellationToken);
+
+        return NoContent();
+    }
 }

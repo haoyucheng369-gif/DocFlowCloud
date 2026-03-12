@@ -1,5 +1,4 @@
 ﻿using System.Text;
-using System.Text.Json;
 using DocFlowCloud.Application.Abstractions.Messaging;
 using RabbitMQ.Client;
 
@@ -16,6 +15,11 @@ public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
 
     public Task PublishJobCreatedAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
+        throw new NotSupportedException("Use PublishRawAsync for integration messages.");
+    }
+
+    public Task PublishRawAsync(string payloadJson, CancellationToken cancellationToken = default)
+    {
         var factory = new ConnectionFactory
         {
             HostName = _settings.HostName,
@@ -28,14 +32,25 @@ public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
         using var channel = connection.CreateModel();
 
         channel.QueueDeclare(
-            queue: _settings.QueueName,
+            queue: _settings.DeadLetterQueueName,
             durable: true,
             exclusive: false,
             autoDelete: false,
             arguments: null);
 
-        var payload = JsonSerializer.Serialize(new { jobId });
-        var body = Encoding.UTF8.GetBytes(payload);
+        var mainQueueArguments = new Dictionary<string, object>
+        {
+            ["x-dead-letter-routing-key"] = _settings.DeadLetterQueueName
+        };
+
+        channel.QueueDeclare(
+            queue: _settings.QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: mainQueueArguments);
+
+        var body = Encoding.UTF8.GetBytes(payloadJson);
 
         var properties = channel.CreateBasicProperties();
         properties.Persistent = true;
