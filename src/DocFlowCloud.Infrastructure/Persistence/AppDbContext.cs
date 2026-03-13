@@ -46,6 +46,8 @@ public sealed class AppDbContext : DbContext
             entity.HasKey(x => x.Id);
 
             entity.Property(x => x.ConsumerName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Status).HasConversion<string>().HasMaxLength(50).IsRequired();
+            entity.Property(x => x.ErrorMessage).HasMaxLength(2000);
             entity.HasIndex(x => new { x.MessageId, x.ConsumerName }).IsUnique();
         });
     }

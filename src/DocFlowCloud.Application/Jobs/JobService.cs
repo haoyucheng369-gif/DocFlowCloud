@@ -30,6 +30,7 @@ public sealed class JobService
         {
             MessageId = Guid.NewGuid(),
             JobId = job.Id,
+            IdempotencyKey = $"job:{job.Id}",
             CreatedAtUtc = DateTime.UtcNow
         };
 
@@ -97,6 +98,7 @@ public sealed class JobService
         {
             MessageId = Guid.NewGuid(),
             JobId = job.Id,
+            IdempotencyKey = $"job:{job.Id}",
             CreatedAtUtc = DateTime.UtcNow
         };
 

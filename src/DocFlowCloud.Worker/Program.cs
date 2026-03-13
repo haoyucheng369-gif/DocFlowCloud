@@ -1,4 +1,5 @@
-﻿using DocFlowCloud.Application.Jobs;
+using DocFlowCloud.Application.Abstractions.Processing;
+using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Infrastructure;
 using DocFlowCloud.Worker;
 using Microsoft.Extensions.Hosting;
@@ -12,6 +13,7 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JobService>();
+builder.Services.AddScoped<IJobSideEffectExecutor, JobSideEffectExecutor>();
 
 builder.Services.AddHostedService<OutboxPublisherWorker>();
 builder.Services.AddHostedService<RabbitMqWorker>();

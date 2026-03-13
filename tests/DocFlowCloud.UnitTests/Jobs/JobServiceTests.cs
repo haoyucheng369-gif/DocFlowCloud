@@ -1,8 +1,10 @@
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Exceptions;
 using DocFlowCloud.Application.Jobs;
+using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Jobs;
 using DocFlowCloud.Domain.Outbox;
+using System.Text.Json;
 
 namespace DocFlowCloud.UnitTests.Jobs;
 
@@ -26,6 +28,26 @@ public sealed class JobServiceTests
         var service = new JobService(repository, new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<InvalidJobStateException>(() => service.RetryAsync(job.Id));
+    }
+
+    [Fact]
+    public async Task CreateAsync_UsesStableJobBasedIdempotencyKey()
+    {
+        var repository = new InMemoryJobRepository();
+        var outboxRepository = new RecordingOutboxRepository();
+        var service = new JobService(repository, outboxRepository);
+
+        var jobId = await service.CreateAsync(new CreateJobRequest
+        {
+            Name = "demo",
+            Type = "pdf",
+            PayloadJson = "{}"
+        });
+
+        var payload = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(outboxRepository.SinglePayload)!;
+
+        Assert.Equal(jobId, payload.JobId);
+        Assert.Equal($"job:{jobId}", payload.IdempotencyKey);
     }
 
     private sealed class InMemoryJobRepository : IJobRepository
@@ -58,6 +80,27 @@ public sealed class JobServiceTests
     {
         public Task AddAsync(OutboxMessage message, CancellationToken cancellationToken = default)
         {
+            return Task.CompletedTask;
+        }
+
+        public Task<List<OutboxMessage>> GetUnprocessedAsync(int take, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new List<OutboxMessage>());
+        }
+
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingOutboxRepository : IOutboxMessageRepository
+    {
+        public string SinglePayload { get; private set; } = string.Empty;
+
+        public Task AddAsync(OutboxMessage message, CancellationToken cancellationToken = default)
+        {
+            SinglePayload = message.PayloadJson;
             return Task.CompletedTask;
         }
 

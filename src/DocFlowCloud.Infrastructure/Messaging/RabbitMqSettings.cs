@@ -11,4 +11,5 @@ public sealed class RabbitMqSettings
 
     public string QueueName { get; set; } = "docflow.jobs";
     public string DeadLetterQueueName { get; set; } = "docflow.jobs.dlq";
+    public int ProcessingTimeoutSeconds { get; set; } = 300;
 }

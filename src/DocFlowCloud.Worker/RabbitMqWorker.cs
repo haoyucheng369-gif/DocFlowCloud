@@ -1,8 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using DocFlowCloud.Application.Abstractions.Persistence;
+using DocFlowCloud.Application.Abstractions.Processing;
 using DocFlowCloud.Application.Exceptions;
-using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Inbox;
 using DocFlowCloud.Domain.Jobs;
@@ -98,72 +98,40 @@ public sealed class RabbitMqWorker : BackgroundService
                     ?? throw new InvalidOperationException("Message deserialization failed.");
 
                 using var scope = _scopeFactory.CreateScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
-                var jobService = scope.ServiceProvider.GetRequiredService<JobService>();
 
-                var alreadyProcessed = await inboxRepository.ExistsAsync(
+                var claimed = await inboxRepository.TryClaimAsync(
                     message.MessageId,
                     ConsumerName,
+                    TimeSpan.FromSeconds(_settings.ProcessingTimeoutSeconds),
                     stoppingToken);
 
-                if (alreadyProcessed)
+                if (!claimed)
                 {
-                    _logger.LogWarning("Duplicate message ignored. MessageId: {MessageId}", message.MessageId);
+                    _logger.LogWarning("Message was already claimed or processed. MessageId: {MessageId}", message.MessageId);
                     _channel.BasicAck(eventArgs.DeliveryTag, false);
                     return;
                 }
 
-                await jobService.MarkProcessingAsync(message.JobId, stoppingToken);
-
-                await Task.Delay(3000, stoppingToken);
-
-                var resultJson = JsonSerializer.Serialize(new
+                var completion = await TryCompleteAlreadySucceededJobAsync(message, stoppingToken);
+                if (completion)
                 {
-                    processedAtUtc = DateTime.UtcNow,
-                    status = "OK"
-                });
+                    _channel.BasicAck(eventArgs.DeliveryTag, false);
+                    _logger.LogInformation("Job {JobId} was already succeeded. Side effects were skipped.", message.JobId);
+                    return;
+                }
 
-                await using var transaction = await dbContext.Database.BeginTransactionAsync(stoppingToken);
-
-                var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, stoppingToken)
-                    ?? throw new JobNotFoundException(message.JobId);
-
-                job.MarkSucceeded(resultJson);
-                await inboxRepository.AddAsync(new InboxMessage(message.MessageId, ConsumerName), stoppingToken);
-                await dbContext.SaveChangesAsync(stoppingToken);
-                await transaction.CommitAsync(stoppingToken);
+                var resultJson = await ExecuteSideEffectsAsync(message, stoppingToken);
+                await CompleteMessageAsync(message, resultJson, stoppingToken);
 
                 _channel.BasicAck(eventArgs.DeliveryTag, false);
-
                 _logger.LogInformation("Job {JobId} processed successfully.", message.JobId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error while processing message.");
 
-                await TryMarkJobFailedAsync(json, ex, stoppingToken);
-
-                try
-                {
-                    var retryCount = GetRetryCount(eventArgs.BasicProperties);
-
-                    if (retryCount < MaxRetryCount)
-                    {
-                        RepublishWithRetry(body, retryCount + 1);
-                        _logger.LogWarning("Message requeued with retry count {RetryCount}", retryCount + 1);
-                    }
-                    else
-                    {
-                        PublishToDeadLetter(body);
-                        _logger.LogError("Message moved to DLQ after max retry.");
-                    }
-                }
-                catch (Exception retryEx)
-                {
-                    _logger.LogError(retryEx, "Failed during retry/DLQ handling.");
-                }
-
+                await HandleFailureAsync(json, ex, body, eventArgs.BasicProperties, stoppingToken);
                 _channel.BasicAck(eventArgs.DeliveryTag, false);
             }
         };
@@ -178,7 +146,122 @@ public sealed class RabbitMqWorker : BackgroundService
         return Task.CompletedTask;
     }
 
-    private async Task TryMarkJobFailedAsync(string json, Exception exception, CancellationToken cancellationToken)
+    private async Task<bool> TryCompleteAlreadySucceededJobAsync(
+        JobCreatedIntegrationMessage message,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken)
+            ?? throw new JobNotFoundException(message.JobId);
+
+        if (job.Status != JobStatus.Succeeded)
+        {
+            return false;
+        }
+
+        var inbox = await dbContext.InboxMessages.FirstOrDefaultAsync(
+            x => x.MessageId == message.MessageId && x.ConsumerName == ConsumerName,
+            cancellationToken)
+            ?? throw new InvalidOperationException($"Inbox claim for message '{message.MessageId}' was not found.");
+
+        if (inbox.Status == InboxStatus.Processing)
+        {
+            inbox.MarkProcessed();
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        return true;
+    }
+
+    private async Task<string> ExecuteSideEffectsAsync(
+        JobCreatedIntegrationMessage message,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var executor = scope.ServiceProvider.GetRequiredService<IJobSideEffectExecutor>();
+
+        var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken)
+            ?? throw new JobNotFoundException(message.JobId);
+
+        return await executor.ExecuteAsync(
+            job.Id,
+            job.Type,
+            job.PayloadJson,
+            message.IdempotencyKey,
+            cancellationToken);
+    }
+
+    private async Task CompleteMessageAsync(
+        JobCreatedIntegrationMessage message,
+        string resultJson,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken)
+            ?? throw new JobNotFoundException(message.JobId);
+
+        var inbox = await dbContext.InboxMessages.FirstOrDefaultAsync(
+            x => x.MessageId == message.MessageId && x.ConsumerName == ConsumerName,
+            cancellationToken)
+            ?? throw new InvalidOperationException($"Inbox claim for message '{message.MessageId}' was not found.");
+
+        if (job.Status == JobStatus.Succeeded)
+        {
+            inbox.MarkProcessed();
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return;
+        }
+
+        job.MarkProcessing();
+        job.MarkSucceeded(resultJson);
+        inbox.MarkProcessed();
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task HandleFailureAsync(
+        string json,
+        Exception exception,
+        byte[] body,
+        IBasicProperties? properties,
+        CancellationToken cancellationToken)
+    {
+        await TryMarkFailedAsync(json, exception, cancellationToken);
+
+        try
+        {
+            var retryCount = GetRetryCount(properties);
+
+            if (retryCount < MaxRetryCount)
+            {
+                RepublishWithRetry(body, retryCount + 1);
+                _logger.LogWarning("Message requeued with retry count {RetryCount}", retryCount + 1);
+            }
+            else
+            {
+                PublishToDeadLetter(body);
+                _logger.LogError("Message moved to DLQ after max retry.");
+            }
+        }
+        catch (Exception retryEx)
+        {
+            _logger.LogError(retryEx, "Failed during retry/DLQ handling.");
+        }
+    }
+
+    private async Task TryMarkFailedAsync(string json, Exception exception, CancellationToken cancellationToken)
     {
         try
         {
@@ -190,19 +273,30 @@ public sealed class RabbitMqWorker : BackgroundService
 
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken);
 
-            if (job is null || job.Status is JobStatus.Succeeded or JobStatus.Failed)
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+            var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken);
+            var inbox = await dbContext.InboxMessages.FirstOrDefaultAsync(
+                x => x.MessageId == message.MessageId && x.ConsumerName == ConsumerName,
+                cancellationToken);
+
+            if (job is not null && job.Status != JobStatus.Succeeded && job.Status != JobStatus.Failed)
             {
-                return;
+                job.MarkFailed(exception.Message);
             }
 
-            job.MarkFailed(exception.Message);
+            if (inbox is not null && inbox.Status == InboxStatus.Processing)
+            {
+                inbox.MarkFailed(exception.Message);
+            }
+
             await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
         catch (Exception markFailedException)
         {
-            _logger.LogError(markFailedException, "Failed to mark job as failed after processing error.");
+            _logger.LogError(markFailedException, "Failed to mark job and inbox as failed after processing error.");
         }
     }
 
