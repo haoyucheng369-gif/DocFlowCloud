@@ -25,6 +25,17 @@ services:
       timeout: 5s
       retries: 10
 
+  migrator:
+    build:
+      context: .
+      dockerfile: src/DocFlowCloud.Api/Dockerfile.migrator
+    container_name: docflow-migrator
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -37,12 +48,16 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
     depends_on:
+      migrator:
+        condition: service_completed_successfully
       sqlserver:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     ports:
       - "8080:8080"
+    volumes:
+      - ./logs/api:/app/logs
 
   worker:
     build:
@@ -55,10 +70,14 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
     depends_on:
+      migrator:
+        condition: service_completed_successfully
       sqlserver:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    volumes:
+      - ./logs/worker:/app/logs
 
   notification-service:
     build:
@@ -71,7 +90,11 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
     depends_on:
+      migrator:
+        condition: service_completed_successfully
       sqlserver:
-        condition: service_started
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    volumes:
+      - ./logs/notification:/app/logs
