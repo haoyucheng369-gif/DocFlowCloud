@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\DocFlowCloud.Application\DocFlowCloud.Application.csproj" />
     <ProjectReference Include="..\..\src\DocFlowCloud.Domain\DocFlowCloud.Domain.csproj" />
     <ProjectReference Include="..\..\src\DocFlowCloud.Infrastructure\DocFlowCloud.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\DocFlowCloud.Worker\DocFlowCloud.Worker.csproj" />
   </ItemGroup>
 
 </Project>

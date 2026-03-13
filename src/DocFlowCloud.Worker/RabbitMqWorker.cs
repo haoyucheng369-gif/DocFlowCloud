@@ -22,6 +22,7 @@ public sealed class RabbitMqWorker : BackgroundService
 {
     private const string ConsumerName = "DocFlowCloud.JobConsumer";
     private const int MaxRetryCount = 3;
+    private static readonly int[] RetryDelaysInSeconds = [1, 5, 30];
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RabbitMqSettings _settings;
@@ -59,6 +60,19 @@ public sealed class RabbitMqWorker : BackgroundService
             exclusive: false,
             autoDelete: false,
             arguments: null);
+
+        var retryQueueArguments = new Dictionary<string, object>
+        {
+            ["x-dead-letter-exchange"] = string.Empty,
+            ["x-dead-letter-routing-key"] = _settings.QueueName
+        };
+
+        _channel.QueueDeclare(
+            queue: _settings.RetryQueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: retryQueueArguments);
 
         var mainQueueArguments = new Dictionary<string, object>
         {
@@ -247,17 +261,24 @@ public sealed class RabbitMqWorker : BackgroundService
 
         try
         {
+            var disposition = MessageFailureClassification.Classify(exception);
             var retryCount = GetRetryCount(properties);
 
-            if (retryCount < MaxRetryCount)
+            if (disposition == MessageFailureDisposition.Retry && retryCount < MaxRetryCount)
             {
                 RepublishWithRetry(body, retryCount + 1);
-                _logger.LogWarning("Message requeued with retry count {RetryCount}", retryCount + 1);
+                _logger.LogWarning(
+                    "Retryable error. Message scheduled for retry {RetryCount} after {DelaySeconds}s",
+                    retryCount + 1,
+                    GetRetryDelaySeconds(retryCount + 1));
             }
             else
             {
                 PublishToDeadLetter(body);
-                _logger.LogError("Message moved to DLQ after max retry.");
+                _logger.LogError(
+                    "Message moved to DLQ. Disposition: {Disposition}, RetryCount: {RetryCount}",
+                    disposition,
+                    retryCount);
             }
         }
         catch (Exception retryEx)
@@ -329,6 +350,7 @@ public sealed class RabbitMqWorker : BackgroundService
 
         var properties = _channel.CreateBasicProperties();
         properties.Persistent = true;
+        properties.Expiration = TimeSpan.FromSeconds(GetRetryDelaySeconds(retryCount)).TotalMilliseconds.ToString("F0");
         properties.Headers = new Dictionary<string, object>
         {
             ["x-retry-count"] = retryCount.ToString()
@@ -336,9 +358,15 @@ public sealed class RabbitMqWorker : BackgroundService
 
         _channel.BasicPublish(
             exchange: string.Empty,
-            routingKey: _settings.QueueName,
+            routingKey: _settings.RetryQueueName,
             basicProperties: properties,
             body: body);
+    }
+
+    private static int GetRetryDelaySeconds(int retryCount)
+    {
+        var index = Math.Clamp(retryCount - 1, 0, RetryDelaysInSeconds.Length - 1);
+        return RetryDelaysInSeconds[index];
     }
 
     private void PublishToDeadLetter(byte[] body)

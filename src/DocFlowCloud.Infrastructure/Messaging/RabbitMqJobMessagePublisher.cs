@@ -38,6 +38,19 @@ public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
             autoDelete: false,
             arguments: null);
 
+        var retryQueueArguments = new Dictionary<string, object>
+        {
+            ["x-dead-letter-exchange"] = string.Empty,
+            ["x-dead-letter-routing-key"] = _settings.QueueName
+        };
+
+        channel.QueueDeclare(
+            queue: _settings.RetryQueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: retryQueueArguments);
+
         var mainQueueArguments = new Dictionary<string, object>
         {
             ["x-dead-letter-routing-key"] = _settings.DeadLetterQueueName

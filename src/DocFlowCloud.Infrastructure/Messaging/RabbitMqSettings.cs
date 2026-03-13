@@ -10,6 +10,7 @@ public sealed class RabbitMqSettings
     public string Password { get; set; } = "guest";
 
     public string QueueName { get; set; } = "docflow.jobs";
+    public string RetryQueueName { get; set; } = "docflow.jobs.retry";
     public string DeadLetterQueueName { get; set; } = "docflow.jobs.dlq";
     public int ProcessingTimeoutSeconds { get; set; } = 300;
 }
