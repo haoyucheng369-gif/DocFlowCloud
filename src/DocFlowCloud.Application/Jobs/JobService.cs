@@ -1,3 +1,4 @@
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Exceptions;
 using DocFlowCloud.Application.Messaging;
@@ -9,13 +10,16 @@ namespace DocFlowCloud.Application.Jobs;
 
 public sealed class JobService
 {
+    private readonly ICorrelationContextAccessor _correlationContextAccessor;
     private readonly IJobRepository _jobRepository;
     private readonly IOutboxMessageRepository _outboxMessageRepository;
 
     public JobService(
+        ICorrelationContextAccessor correlationContextAccessor,
         IJobRepository jobRepository,
         IOutboxMessageRepository outboxMessageRepository)
     {
+        _correlationContextAccessor = correlationContextAccessor;
         _jobRepository = jobRepository;
         _outboxMessageRepository = outboxMessageRepository;
     }
@@ -30,6 +34,7 @@ public sealed class JobService
         {
             MessageId = Guid.NewGuid(),
             JobId = job.Id,
+            CorrelationId = _correlationContextAccessor.GetCorrelationId(),
             IdempotencyKey = $"job:{job.Id}",
             CreatedAtUtc = DateTime.UtcNow
         };
@@ -98,6 +103,7 @@ public sealed class JobService
         {
             MessageId = Guid.NewGuid(),
             JobId = job.Id,
+            CorrelationId = _correlationContextAccessor.GetCorrelationId(),
             IdempotencyKey = $"job:{job.Id}",
             CreatedAtUtc = DateTime.UtcNow
         };

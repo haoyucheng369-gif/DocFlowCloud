@@ -1,3 +1,4 @@
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Exceptions;
 using DocFlowCloud.Application.Jobs;
@@ -13,7 +14,7 @@ public sealed class JobServiceTests
     [Fact]
     public async Task RetryAsync_WhenJobMissing_ThrowsJobNotFoundException()
     {
-        var service = new JobService(new InMemoryJobRepository(), new InMemoryOutboxRepository());
+        var service = new JobService(new StubCorrelationContextAccessor(), new InMemoryJobRepository(), new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<JobNotFoundException>(() => service.RetryAsync(Guid.NewGuid()));
     }
@@ -25,7 +26,7 @@ public sealed class JobServiceTests
         var job = new Job("demo", "pdf", "{}");
         await repository.AddAsync(job);
 
-        var service = new JobService(repository, new InMemoryOutboxRepository());
+        var service = new JobService(new StubCorrelationContextAccessor(), repository, new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<InvalidJobStateException>(() => service.RetryAsync(job.Id));
     }
@@ -35,7 +36,7 @@ public sealed class JobServiceTests
     {
         var repository = new InMemoryJobRepository();
         var outboxRepository = new RecordingOutboxRepository();
-        var service = new JobService(repository, outboxRepository);
+        var service = new JobService(new StubCorrelationContextAccessor(), repository, outboxRepository);
 
         var jobId = await service.CreateAsync(new CreateJobRequest
         {
@@ -48,6 +49,7 @@ public sealed class JobServiceTests
 
         Assert.Equal(jobId, payload.JobId);
         Assert.Equal($"job:{jobId}", payload.IdempotencyKey);
+        Assert.Equal("corr-123", payload.CorrelationId);
     }
 
     private sealed class InMemoryJobRepository : IJobRepository
@@ -73,6 +75,14 @@ public sealed class JobServiceTests
         public Task SaveChangesAsync(CancellationToken cancellationToken = default)
         {
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubCorrelationContextAccessor : ICorrelationContextAccessor
+    {
+        public string GetCorrelationId()
+        {
+            return "corr-123";
         }
     }
 

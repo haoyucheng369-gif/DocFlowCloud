@@ -1,3 +1,4 @@
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Exceptions;
 using Microsoft.AspNetCore.Mvc;
 using System.Net;
@@ -63,6 +64,10 @@ public sealed class GlobalExceptionMiddleware
         };
 
         problemDetails.Extensions["traceId"] = context.TraceIdentifier;
+        problemDetails.Extensions["correlationId"] =
+            context.Items.TryGetValue(CorrelationConstants.HeaderName, out var correlationId)
+                ? correlationId
+                : context.TraceIdentifier;
         problemDetails.Instance = context.Request.Path;
 
         return problemDetails;

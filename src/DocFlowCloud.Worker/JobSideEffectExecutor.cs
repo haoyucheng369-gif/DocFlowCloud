@@ -1,3 +1,4 @@
+using DocFlowCloud.Application.Abstractions.Observability;
 using System.Text.Json;
 using DocFlowCloud.Application.Abstractions.Processing;
 using Microsoft.Extensions.Logging;
@@ -18,13 +19,21 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
         string jobType,
         string payloadJson,
         string idempotencyKey,
+        string correlationId,
         CancellationToken cancellationToken = default)
     {
         _logger.LogInformation(
-            "Executing external side effect. JobId: {JobId}, JobType: {JobType}, IdempotencyKey: {IdempotencyKey}",
+            "Executing external side effect. JobId: {JobId}, JobType: {JobType}, IdempotencyKey: {IdempotencyKey}, CorrelationId: {CorrelationId}",
             jobId,
             jobType,
-            idempotencyKey);
+            idempotencyKey,
+            correlationId);
+
+        // When this becomes a real outbound HTTP call, propagate the correlation id as X-Correlation-Id.
+        var outboundHeaders = new Dictionary<string, string>
+        {
+            [CorrelationConstants.HeaderName] = correlationId
+        };
 
         await Task.Delay(3000, cancellationToken);
 
@@ -34,7 +43,9 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
             status = "OK",
             jobType,
             payloadJson,
-            idempotencyKey
+            idempotencyKey,
+            correlationId,
+            outboundHeaders
         });
     }
 }

@@ -1,4 +1,5 @@
-﻿using DocFlowCloud.Application.Jobs;
+using DocFlowCloud.Application.Abstractions.Observability;
+using DocFlowCloud.Application.Jobs;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DocFlowCloud.Api.Controllers;
@@ -7,25 +8,38 @@ namespace DocFlowCloud.Api.Controllers;
 [Route("api/[controller]")]
 public sealed class JobsController : ControllerBase
 {
+    private readonly ICorrelationContextAccessor _correlationContextAccessor;
     private readonly JobService _jobService;
 
-    public JobsController(JobService jobService)
+    public JobsController(JobService jobService, ICorrelationContextAccessor correlationContextAccessor)
     {
         _jobService = jobService;
+        _correlationContextAccessor = correlationContextAccessor;
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateJobRequest request, CancellationToken cancellationToken)
     {
         var jobId = await _jobService.CreateAsync(request, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = jobId }, new { jobId });
+
+        return CreatedAtAction(
+            nameof(GetById),
+            new { id = jobId },
+            new
+            {
+                jobId,
+                correlationId = _correlationContextAccessor.GetCorrelationId()
+            });
     }
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
         var job = await _jobService.GetByIdAsync(id, cancellationToken);
-        if (job is null) return NotFound();
+        if (job is null)
+        {
+            return NotFound();
+        }
 
         return Ok(job);
     }

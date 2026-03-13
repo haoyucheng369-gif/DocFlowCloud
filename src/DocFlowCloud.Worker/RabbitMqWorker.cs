@@ -14,6 +14,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using Serilog.Context;
 
 namespace DocFlowCloud.Worker;
 
@@ -97,35 +98,38 @@ public sealed class RabbitMqWorker : BackgroundService
                 var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json)
                     ?? throw new InvalidOperationException("Message deserialization failed.");
 
-                using var scope = _scopeFactory.CreateScope();
-                var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
-
-                var claimed = await inboxRepository.TryClaimAsync(
-                    message.MessageId,
-                    ConsumerName,
-                    TimeSpan.FromSeconds(_settings.ProcessingTimeoutSeconds),
-                    stoppingToken);
-
-                if (!claimed)
+                using (LogContext.PushProperty("CorrelationId", message.CorrelationId))
                 {
-                    _logger.LogWarning("Message was already claimed or processed. MessageId: {MessageId}", message.MessageId);
+                    using var scope = _scopeFactory.CreateScope();
+                    var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
+
+                    var claimed = await inboxRepository.TryClaimAsync(
+                        message.MessageId,
+                        ConsumerName,
+                        TimeSpan.FromSeconds(_settings.ProcessingTimeoutSeconds),
+                        stoppingToken);
+
+                    if (!claimed)
+                    {
+                        _logger.LogWarning("Message was already claimed or processed. MessageId: {MessageId}", message.MessageId);
+                        _channel.BasicAck(eventArgs.DeliveryTag, false);
+                        return;
+                    }
+
+                    var completion = await TryCompleteAlreadySucceededJobAsync(message, stoppingToken);
+                    if (completion)
+                    {
+                        _channel.BasicAck(eventArgs.DeliveryTag, false);
+                        _logger.LogInformation("Job {JobId} was already succeeded. Side effects were skipped.", message.JobId);
+                        return;
+                    }
+
+                    var resultJson = await ExecuteSideEffectsAsync(message, stoppingToken);
+                    await CompleteMessageAsync(message, resultJson, stoppingToken);
+
                     _channel.BasicAck(eventArgs.DeliveryTag, false);
-                    return;
+                    _logger.LogInformation("Job {JobId} processed successfully.", message.JobId);
                 }
-
-                var completion = await TryCompleteAlreadySucceededJobAsync(message, stoppingToken);
-                if (completion)
-                {
-                    _channel.BasicAck(eventArgs.DeliveryTag, false);
-                    _logger.LogInformation("Job {JobId} was already succeeded. Side effects were skipped.", message.JobId);
-                    return;
-                }
-
-                var resultJson = await ExecuteSideEffectsAsync(message, stoppingToken);
-                await CompleteMessageAsync(message, resultJson, stoppingToken);
-
-                _channel.BasicAck(eventArgs.DeliveryTag, false);
-                _logger.LogInformation("Job {JobId} processed successfully.", message.JobId);
             }
             catch (Exception ex)
             {
@@ -194,6 +198,7 @@ public sealed class RabbitMqWorker : BackgroundService
             job.Type,
             job.PayloadJson,
             message.IdempotencyKey,
+            message.CorrelationId,
             cancellationToken);
     }
 
