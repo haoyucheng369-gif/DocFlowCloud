@@ -1,4 +1,6 @@
-﻿using System.Net;
+using DocFlowCloud.Application.Exceptions;
+using Microsoft.AspNetCore.Mvc;
+using System.Net;
 using System.Text.Json;
 
 namespace DocFlowCloud.Api.Middleware;
@@ -26,17 +28,43 @@ public sealed class GlobalExceptionMiddleware
         {
             _logger.LogError(ex, "Unhandled exception occurred. TraceId: {TraceId}", context.TraceIdentifier);
 
-            context.Response.ContentType = "application/json";
-            context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+            var problem = CreateProblemDetails(ex, context);
 
-            var response = new
-            {
-                message = "An unexpected error occurred.",
-                traceId = context.TraceIdentifier
-            };
+            context.Response.ContentType = "application/problem+json";
+            context.Response.StatusCode = problem.Status ?? (int)HttpStatusCode.InternalServerError;
 
-            var json = JsonSerializer.Serialize(response);
-            await context.Response.WriteAsync(json);
+            var payload = JsonSerializer.Serialize(problem);
+            await context.Response.WriteAsync(payload);
         }
+    }
+
+    private static ProblemDetails CreateProblemDetails(Exception exception, HttpContext context)
+    {
+        var problemDetails = exception switch
+        {
+            JobNotFoundException => new ProblemDetails
+            {
+                Title = "Job not found",
+                Detail = exception.Message,
+                Status = StatusCodes.Status404NotFound
+            },
+            InvalidJobStateException => new ProblemDetails
+            {
+                Title = "Invalid job state",
+                Detail = exception.Message,
+                Status = StatusCodes.Status409Conflict
+            },
+            _ => new ProblemDetails
+            {
+                Title = "An unexpected error occurred.",
+                Detail = "Use the trace identifier for diagnostics.",
+                Status = StatusCodes.Status500InternalServerError
+            }
+        };
+
+        problemDetails.Extensions["traceId"] = context.TraceIdentifier;
+        problemDetails.Instance = context.Request.Path;
+
+        return problemDetails;
     }
 }

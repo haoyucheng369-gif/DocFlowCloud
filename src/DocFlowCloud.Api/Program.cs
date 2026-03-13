@@ -16,10 +16,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog();
 
 builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateJobRequestValidator>();
 
-builder.Services.AddHealthChecks();
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<DocFlowCloud.Infrastructure.Persistence.AppDbContext>();
 

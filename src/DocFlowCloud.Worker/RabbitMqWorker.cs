@@ -1,10 +1,14 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using DocFlowCloud.Application.Abstractions.Persistence;
+using DocFlowCloud.Application.Exceptions;
 using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Inbox;
+using DocFlowCloud.Domain.Jobs;
 using DocFlowCloud.Infrastructure.Messaging;
+using DocFlowCloud.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -67,7 +71,7 @@ public sealed class RabbitMqWorker : BackgroundService
             autoDelete: false,
             arguments: mainQueueArguments);
 
-        _channel.BasicQos(prefetchSize: 0, prefetchCount: 1, global: false);
+        _channel.BasicQos(prefetchSize: 0, prefetchCount: 10, global: false);
 
         _logger.LogInformation("RabbitMQ worker connected. Queue: {QueueName}", _settings.QueueName);
 
@@ -91,9 +95,10 @@ public sealed class RabbitMqWorker : BackgroundService
             try
             {
                 var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json)
-                              ?? throw new InvalidOperationException("Message deserialization failed.");
+                    ?? throw new InvalidOperationException("Message deserialization failed.");
 
                 using var scope = _scopeFactory.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
                 var jobService = scope.ServiceProvider.GetRequiredService<JobService>();
 
@@ -119,10 +124,15 @@ public sealed class RabbitMqWorker : BackgroundService
                     status = "OK"
                 });
 
-                await jobService.MarkSucceededAsync(message.JobId, resultJson, stoppingToken);
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(stoppingToken);
 
+                var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, stoppingToken)
+                    ?? throw new JobNotFoundException(message.JobId);
+
+                job.MarkSucceeded(resultJson);
                 await inboxRepository.AddAsync(new InboxMessage(message.MessageId, ConsumerName), stoppingToken);
-                await inboxRepository.SaveChangesAsync(stoppingToken);
+                await dbContext.SaveChangesAsync(stoppingToken);
+                await transaction.CommitAsync(stoppingToken);
 
                 _channel.BasicAck(eventArgs.DeliveryTag, false);
 
@@ -131,6 +141,8 @@ public sealed class RabbitMqWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error while processing message.");
+
+                await TryMarkJobFailedAsync(json, ex, stoppingToken);
 
                 try
                 {
@@ -152,7 +164,7 @@ public sealed class RabbitMqWorker : BackgroundService
                     _logger.LogError(retryEx, "Failed during retry/DLQ handling.");
                 }
 
-                _channel?.BasicAck(eventArgs.DeliveryTag, false);
+                _channel.BasicAck(eventArgs.DeliveryTag, false);
             }
         };
 
@@ -164,6 +176,34 @@ public sealed class RabbitMqWorker : BackgroundService
         _logger.LogInformation("RabbitMQ consumer started.");
 
         return Task.CompletedTask;
+    }
+
+    private async Task TryMarkJobFailedAsync(string json, Exception exception, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json);
+            if (message is null)
+            {
+                return;
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken);
+
+            if (job is null || job.Status is JobStatus.Succeeded or JobStatus.Failed)
+            {
+                return;
+            }
+
+            job.MarkFailed(exception.Message);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception markFailedException)
+        {
+            _logger.LogError(markFailedException, "Failed to mark job as failed after processing error.");
+        }
     }
 
     private int GetRetryCount(IBasicProperties? properties)
@@ -185,7 +225,8 @@ public sealed class RabbitMqWorker : BackgroundService
 
     private void RepublishWithRetry(byte[] body, int retryCount)
     {
-        if (_channel is null) return;
+        if (_channel is null)
+            return;
 
         var properties = _channel.CreateBasicProperties();
         properties.Persistent = true;
@@ -203,7 +244,8 @@ public sealed class RabbitMqWorker : BackgroundService
 
     private void PublishToDeadLetter(byte[] body)
     {
-        if (_channel is null) return;
+        if (_channel is null)
+            return;
 
         var properties = _channel.CreateBasicProperties();
         properties.Persistent = true;

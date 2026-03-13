@@ -8,6 +8,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\DocFlowCloud.Application\DocFlowCloud.Application.csproj" />
+		<ProjectReference Include="..\DocFlowCloud.Domain\DocFlowCloud.Domain.csproj" />
 		<ProjectReference Include="..\DocFlowCloud.Infrastructure\DocFlowCloud.Infrastructure.csproj" />
 	</ItemGroup>
 

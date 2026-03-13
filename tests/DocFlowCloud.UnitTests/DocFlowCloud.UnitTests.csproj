@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\DocFlowCloud.Api\DocFlowCloud.Api.csproj" />
     <ProjectReference Include="..\..\src\DocFlowCloud.Application\DocFlowCloud.Application.csproj" />
     <ProjectReference Include="..\..\src\DocFlowCloud.Domain\DocFlowCloud.Domain.csproj" />
   </ItemGroup>
