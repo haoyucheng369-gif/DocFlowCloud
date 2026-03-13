@@ -38,7 +38,7 @@ public sealed class OutboxPublisherWorker : BackgroundService
                 {
                     try
                     {
-                        await publisher.PublishRawAsync(message.PayloadJson, stoppingToken);
+                        await publisher.PublishRawAsync(message.Type, message.PayloadJson, stoppingToken);
                         message.MarkProcessed();
                     }
                     catch (Exception ex)

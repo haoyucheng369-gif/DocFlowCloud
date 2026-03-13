@@ -45,11 +45,13 @@ public sealed class JobServiceTests
             PayloadJson = "{}"
         });
 
-        var payload = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(outboxRepository.SinglePayload)!;
+        var processingPayload = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(
+            outboxRepository.Messages.Single(x => x.Type == nameof(JobCreatedIntegrationMessage)).PayloadJson)!;
 
-        Assert.Equal(jobId, payload.JobId);
-        Assert.Equal($"job:{jobId}", payload.IdempotencyKey);
-        Assert.Equal("corr-123", payload.CorrelationId);
+        Assert.Single(outboxRepository.Messages);
+        Assert.Equal(jobId, processingPayload.JobId);
+        Assert.Equal($"job:{jobId}", processingPayload.IdempotencyKey);
+        Assert.Equal("corr-123", processingPayload.CorrelationId);
     }
 
     private sealed class InMemoryJobRepository : IJobRepository
@@ -106,11 +108,11 @@ public sealed class JobServiceTests
 
     private sealed class RecordingOutboxRepository : IOutboxMessageRepository
     {
-        public string SinglePayload { get; private set; } = string.Empty;
+        public List<OutboxMessage> Messages { get; } = [];
 
         public Task AddAsync(OutboxMessage message, CancellationToken cancellationToken = default)
         {
-            SinglePayload = message.PayloadJson;
+            Messages.Add(message);
             return Task.CompletedTask;
         }
 

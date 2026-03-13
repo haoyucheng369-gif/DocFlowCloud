@@ -29,20 +29,7 @@ public sealed class JobService
         var job = new Job(request.Name, request.Type, request.PayloadJson);
 
         await _jobRepository.AddAsync(job, cancellationToken);
-
-        var integrationMessage = new JobCreatedIntegrationMessage
-        {
-            MessageId = Guid.NewGuid(),
-            JobId = job.Id,
-            CorrelationId = _correlationContextAccessor.GetCorrelationId(),
-            IdempotencyKey = $"job:{job.Id}",
-            CreatedAtUtc = DateTime.UtcNow
-        };
-
-        var payload = JsonSerializer.Serialize(integrationMessage);
-        var outboxMessage = new OutboxMessage(nameof(JobCreatedIntegrationMessage), payload);
-
-        await _outboxMessageRepository.AddAsync(outboxMessage, cancellationToken);
+        await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
         await _jobRepository.SaveChangesAsync(cancellationToken);
 
         return job.Id;
@@ -98,12 +85,17 @@ public sealed class JobService
             ?? throw new JobNotFoundException(jobId);
 
         TryChangeState(jobId, job.Retry);
+        await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
 
+    private async Task AddOutboxMessageAsync(Job job, string correlationId, CancellationToken cancellationToken)
+    {
         var integrationMessage = new JobCreatedIntegrationMessage
         {
             MessageId = Guid.NewGuid(),
             JobId = job.Id,
-            CorrelationId = _correlationContextAccessor.GetCorrelationId(),
+            CorrelationId = correlationId,
             IdempotencyKey = $"job:{job.Id}",
             CreatedAtUtc = DateTime.UtcNow
         };
@@ -112,7 +104,6 @@ public sealed class JobService
         var outboxMessage = new OutboxMessage(nameof(JobCreatedIntegrationMessage), payload);
 
         await _outboxMessageRepository.AddAsync(outboxMessage, cancellationToken);
-        await _jobRepository.SaveChangesAsync(cancellationToken);
     }
 
     private static void TryChangeState(Guid jobId, Action action)

@@ -54,6 +54,12 @@ public sealed class RabbitMqWorker : BackgroundService
         _connection = factory.CreateConnection();
         _channel = _connection.CreateModel();
 
+        _channel.ExchangeDeclare(
+            exchange: _settings.TopicExchangeName,
+            type: ExchangeType.Topic,
+            durable: true,
+            autoDelete: false);
+
         _channel.QueueDeclare(
             queue: _settings.DeadLetterQueueName,
             durable: true,
@@ -63,8 +69,8 @@ public sealed class RabbitMqWorker : BackgroundService
 
         var retryQueueArguments = new Dictionary<string, object>
         {
-            ["x-dead-letter-exchange"] = string.Empty,
-            ["x-dead-letter-routing-key"] = _settings.QueueName
+            ["x-dead-letter-exchange"] = _settings.TopicExchangeName,
+            ["x-dead-letter-routing-key"] = _settings.JobCreatedRoutingKey
         };
 
         _channel.QueueDeclare(
@@ -76,6 +82,7 @@ public sealed class RabbitMqWorker : BackgroundService
 
         var mainQueueArguments = new Dictionary<string, object>
         {
+            ["x-dead-letter-exchange"] = string.Empty,
             ["x-dead-letter-routing-key"] = _settings.DeadLetterQueueName
         };
 
@@ -85,6 +92,7 @@ public sealed class RabbitMqWorker : BackgroundService
             exclusive: false,
             autoDelete: false,
             arguments: mainQueueArguments);
+        _channel.QueueBind(_settings.QueueName, _settings.TopicExchangeName, _settings.JobQueueBindingKey);
 
         _channel.BasicQos(prefetchSize: 0, prefetchCount: 10, global: false);
 
