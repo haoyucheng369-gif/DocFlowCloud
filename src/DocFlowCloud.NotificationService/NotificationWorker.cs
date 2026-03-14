@@ -15,6 +15,8 @@ namespace DocFlowCloud.NotificationService;
 
 public sealed class NotificationWorker : BackgroundService
 {
+    // Notification consumer 和 Job consumer 处理的是同一个事件，
+    // 但 Inbox 去重必须按消费者区分，所以这里要有独立的 ConsumerName。
     private const string ConsumerName = "DocFlowCloud.NotificationConsumer";
 
     private readonly IServiceScopeFactory _scopeFactory;
@@ -36,6 +38,7 @@ public sealed class NotificationWorker : BackgroundService
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
+        // Notification service 只订阅通知相关队列，不负责 retry / DLQ 编排。
         var factory = new ConnectionFactory
         {
             HostName = _settings.HostName,
@@ -61,6 +64,7 @@ public sealed class NotificationWorker : BackgroundService
             arguments: null);
         _channel.QueueBind(_settings.NotificationQueueName, _settings.TopicExchangeName, _settings.NotificationQueueBindingKey);
 
+        // 控制并发抓取量，避免一次在本地积压太多未确认消息。
         _channel.BasicQos(prefetchSize: 0, prefetchCount: 10, global: false);
 
         _logger.LogInformation("Notification worker connected. Queue: {QueueName}", _settings.NotificationQueueName);
@@ -73,10 +77,12 @@ public sealed class NotificationWorker : BackgroundService
         if (_channel is null)
             throw new InvalidOperationException("RabbitMQ channel is not initialized.");
 
+        // 和 Job worker 一样，Notification consumer 也是事件驱动模式，不会主动轮询队列。
         var consumer = new EventingBasicConsumer(_channel);
 
         consumer.Received += async (_, eventArgs) =>
         {
+            // 原始消息先还原成 JSON，再反序列化成契约对象。
             var body = eventArgs.Body.ToArray();
             var json = Encoding.UTF8.GetString(body);
 
@@ -91,6 +97,7 @@ public sealed class NotificationWorker : BackgroundService
                     var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
                     var sender = scope.ServiceProvider.GetRequiredService<NotificationEmailSender>();
 
+                    // 通知消息同样先 claim，避免重复发送通知。
                     var claimed = await inboxRepository.TryClaimAsync(
                         message.MessageId,
                         ConsumerName,
@@ -107,8 +114,10 @@ public sealed class NotificationWorker : BackgroundService
                     var inbox = await inboxRepository.GetByMessageIdAsync(message.MessageId, ConsumerName, stoppingToken)
                         ?? throw new InvalidOperationException($"Inbox claim for notification message '{message.MessageId}' was not found.");
 
+                    // 当前实现是模拟发邮件，后续可以替换成真实邮件服务或 webhook。
                     await sender.SendAsync(message, stoppingToken);
 
+                    // 通知成功后，补齐 Inbox 最终状态。
                     inbox.MarkProcessed();
                     await inboxRepository.SaveChangesAsync(stoppingToken);
 
@@ -118,6 +127,8 @@ public sealed class NotificationWorker : BackgroundService
             }
             catch (Exception ex)
             {
+                // 通知服务当前没有像 Job worker 一样做 retry / DLQ，
+                // 这里只记录错误并 ACK，避免队列里无限重复。
                 _logger.LogError(ex, "Error while processing notification message.");
                 _channel.BasicAck(eventArgs.DeliveryTag, false);
             }

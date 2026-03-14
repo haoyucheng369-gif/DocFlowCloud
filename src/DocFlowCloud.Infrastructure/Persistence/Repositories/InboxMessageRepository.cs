@@ -15,25 +15,29 @@ public sealed class InboxMessageRepository : IInboxMessageRepository
         _dbContext = dbContext;
     }
 
-    // 这里的 claim 不是“声明”，而是“抢占处理权”。
-    // 多个实例同时消费同一条消息时，只有一个实例能成功插入唯一键记录。
-    // 如果旧记录是 Failed，或 Processing 已超时，则允许当前实例重新接管。
+    // 这里的 claim 不是“声明”，而是“抢占这条消息的处理权”。
+    // 依赖 (MessageId, ConsumerName) 唯一键，只有一个实例能首次插入成功。
+    // 如果旧记录已经 Failed，或 Processing 超时了，则允许当前实例重新接管。
     public async Task<bool> TryClaimAsync(
         Guid messageId,
         string consumerName,
         TimeSpan processingTimeout,
         CancellationToken cancellationToken = default)
     {
+        // 默认先尝试插入一条新的 Inbox 记录，初始状态是 Processing。
         var inboxMessage = new InboxMessage(messageId, consumerName);
         await _dbContext.InboxMessages.AddAsync(inboxMessage, cancellationToken);
 
         try
         {
+            // 插入成功，说明当前实例抢到了处理权。
             await _dbContext.SaveChangesAsync(cancellationToken);
             return true;
         }
         catch (DbUpdateException exception) when (IsUniqueConstraintViolation(exception))
         {
+            // 唯一键冲突表示同一个 consumer 已经见过这条消息了。
+            // 这里不直接失败，而是继续判断：是已处理、处理中，还是可以重新接管。
             _dbContext.Entry(inboxMessage).State = EntityState.Detached;
 
             var existingInbox = await GetByMessageIdAsync(messageId, consumerName, cancellationToken);
@@ -44,23 +48,29 @@ public sealed class InboxMessageRepository : IInboxMessageRepository
 
             if (existingInbox.Status == InboxStatus.Processed)
             {
+                // 已成功处理过的消息，不再重复执行。
                 return false;
             }
 
             if (existingInbox.Status == InboxStatus.Failed ||
                 existingInbox.IsStale(DateTime.UtcNow, processingTimeout))
             {
+                // 失败消息，或处理超时卡住的消息，允许重新 claim 接管。
                 existingInbox.Reclaim();
                 await _dbContext.SaveChangesAsync(cancellationToken);
                 return true;
             }
 
+            // 其余情况通常是“别人正在正常处理”，当前实例放弃。
             return false;
         }
     }
 
-    // 读取已经 claim 过的 inbox 记录，后续在事务里更新最终状态。
-    public async Task<InboxMessage?> GetByMessageIdAsync(Guid messageId, string consumerName, CancellationToken cancellationToken = default)
+    // 读取已 claim 的 Inbox 记录，后续在事务里把它更新成 Processed / Failed。
+    public async Task<InboxMessage?> GetByMessageIdAsync(
+        Guid messageId,
+        string consumerName,
+        CancellationToken cancellationToken = default)
     {
         return await _dbContext.InboxMessages
             .FirstOrDefaultAsync(
@@ -75,6 +85,7 @@ public sealed class InboxMessageRepository : IInboxMessageRepository
 
     private static bool IsUniqueConstraintViolation(DbUpdateException exception)
     {
+        // 不同数据库提供程序的唯一键异常码不同，这里统一封装成一个判断。
         if (exception.InnerException is SqlException sqlException)
         {
             return sqlException.Number is 2601 or 2627;
