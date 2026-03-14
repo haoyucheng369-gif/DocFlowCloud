@@ -4,6 +4,8 @@ using DocFlowCloud.Worker;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
+// Worker 进程入口：
+// 负责启动发送侧 worker、消费侧 worker 和卡死恢复 worker。
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate:
@@ -17,13 +19,16 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = Host.CreateApplicationBuilder(args);
 
+// 注入基础设施和外部副作用执行器。
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IJobSideEffectExecutor, JobSideEffectExecutor>();
 
+// 发送、消费、恢复三个后台 worker 同时运行在这个进程里。
 builder.Services.AddHostedService<OutboxPublisherWorker>();
 builder.Services.AddHostedService<RabbitMqWorker>();
 builder.Services.AddHostedService<StaleInboxRecoveryWorker>();
 
+// 统一使用 Serilog 输出日志。
 builder.Services.AddSerilog();
 
 var host = builder.Build();

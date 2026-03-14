@@ -6,6 +6,8 @@ using System.Text.Json;
 
 namespace DocFlowCloud.Api.Middleware;
 
+// 全局异常中间件：
+// 统一把未处理异常转换成 ProblemDetails，避免每个控制器自己写 try/catch。
 public sealed class GlobalExceptionMiddleware
 {
     private readonly RequestDelegate _next;
@@ -27,6 +29,7 @@ public sealed class GlobalExceptionMiddleware
         }
         catch (Exception ex)
         {
+            // 所有未处理异常先统一记日志，再转换成标准 HTTP 错误响应。
             _logger.LogError(ex, "Unhandled exception occurred. TraceId: {TraceId}", context.TraceIdentifier);
 
             var problem = CreateProblemDetails(ex, context);
@@ -41,6 +44,8 @@ public sealed class GlobalExceptionMiddleware
 
     private static ProblemDetails CreateProblemDetails(Exception exception, HttpContext context)
     {
+        // 这里按异常类型映射成更合理的 HTTP 状态码，
+        // 让调用方拿到的不是笼统的 500。
         var problemDetails = exception switch
         {
             JobNotFoundException => new ProblemDetails
@@ -63,6 +68,7 @@ public sealed class GlobalExceptionMiddleware
             }
         };
 
+        // traceId / correlationId 一并返回，方便用户把错误编号反馈给你排查。
         problemDetails.Extensions["traceId"] = context.TraceIdentifier;
         problemDetails.Extensions["correlationId"] =
             context.Items.TryGetValue(CorrelationConstants.HeaderName, out var correlationId)
