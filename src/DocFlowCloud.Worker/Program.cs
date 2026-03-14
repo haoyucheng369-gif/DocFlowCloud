@@ -22,6 +22,7 @@ builder.Services.AddScoped<IJobSideEffectExecutor, JobSideEffectExecutor>();
 
 builder.Services.AddHostedService<OutboxPublisherWorker>();
 builder.Services.AddHostedService<RabbitMqWorker>();
+builder.Services.AddHostedService<StaleInboxRecoveryWorker>();
 
 builder.Services.AddSerilog();
 

@@ -18,4 +18,5 @@ public sealed class RabbitMqSettings
     public string JobQueueBindingKey { get; set; } = "job.created";
     public string NotificationQueueBindingKey { get; set; } = "job.*";
     public int ProcessingTimeoutSeconds { get; set; } = 300;
+    public int StaleRecoveryScanSeconds { get; set; } = 30;
 }
