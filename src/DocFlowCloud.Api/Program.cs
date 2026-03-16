@@ -4,13 +4,15 @@ using DocFlowCloud.Api.Validators;
 using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Infrastructure;
+using DocFlowCloud.Infrastructure.Persistence;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Serilog;
-using DocFlowCloud.Infrastructure.Persistence;
+
+const string FrontendCorsPolicy = "FrontendCorsPolicy";
 
 // API 进程入口：
-// 负责启动 HTTP 服务、配置日志、注册中间件与依赖注入。
+// 负责启动 HTTP 服务、配置日志、注册中间件和依赖注入。
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate:
@@ -24,7 +26,6 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 让 ASP.NET Core 的日志也统一走 Serilog。
 builder.Host.UseSerilog();
 
 // 注册 HTTP / API 相关服务。
@@ -35,9 +36,21 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateJobRequestValidator>();
 builder.Services.AddScoped<ICorrelationContextAccessor, HttpCorrelationContextAccessor>();
 
+// 开发阶段允许本地 React 前端直接访问 API。
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(FrontendCorsPolicy, policy =>
+    {
+        policy
+            .WithOrigins("http://localhost:3000", "http://127.0.0.1:3000")
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
 // 基础健康检查，当前重点检查数据库是否可连通。
 builder.Services.AddHealthChecks()
-    .AddDbContextCheck<DocFlowCloud.Infrastructure.Persistence.AppDbContext>();
+    .AddDbContextCheck<AppDbContext>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -54,6 +67,7 @@ app.UseGlobalExceptionMiddleware();
 
 // 常规 API 中间件。
 app.UseSerilogRequestLogging();
+app.UseCors(FrontendCorsPolicy);
 app.MapHealthChecks("/health");
 app.UseSwagger();
 app.UseSwaggerUI();

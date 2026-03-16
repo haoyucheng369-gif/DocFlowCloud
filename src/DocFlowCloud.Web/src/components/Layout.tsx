@@ -1,6 +1,7 @@
 import { Link, NavLink } from "react-router-dom";
 import type { PropsWithChildren } from "react";
 
+// 页面总布局：统一头部导航和主内容容器，保持界面整洁一致。
 const navClassName = ({ isActive }: { isActive: boolean }) =>
   [
     "rounded-full px-4 py-2 text-sm font-medium transition-colors",
@@ -17,10 +18,10 @@ export function Layout({ children }: PropsWithChildren) {
           </Link>
           <nav className="flex gap-2 rounded-full border border-line bg-white p-1">
             <NavLink to="/" end className={navClassName}>
-              上传任务
+              New Task
             </NavLink>
             <NavLink to="/jobs" className={navClassName}>
-              任务列表
+              Jobs
             </NavLink>
           </nav>
         </div>

@@ -1,7 +1,6 @@
-type Props = {
-  status: string;
-};
+type Props = { status: string };
 
+// 状态徽标：把后端任务状态转换成直观颜色。
 const styles: Record<string, string> = {
   Pending: "bg-slate-100 text-slate-700",
   Processing: "bg-amber-100 text-amber-800",

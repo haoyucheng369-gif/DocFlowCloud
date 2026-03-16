@@ -6,6 +6,7 @@ export type Job = {
   type: string;
   status: JobStatus | string;
   retryCount: number;
+  correlationId?: string | null;
   createdAtUtc: string;
   startedAtUtc?: string | null;
   completedAtUtc?: string | null;

@@ -1,10 +1,50 @@
 import type { CreateJobResponse, Job } from "../types";
 
+// API 调用层：统一封装前端对后端的请求，页面组件只关心业务流程。
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.toString() ?? "http://localhost:5000";
 
+type ProblemDetails = {
+  title?: string;
+  detail?: string;
+  correlationId?: string;
+  errors?: Record<string, string[]>;
+};
+
+function toApiErrorMessage(problem: ProblemDetails) {
+  const fieldErrors = problem.errors
+    ? Object.values(problem.errors)
+        .flat()
+        .filter(Boolean)
+    : [];
+
+  const parts = [problem.title, problem.detail, ...fieldErrors].filter(Boolean);
+  const message = parts.join(" ");
+
+  if (message && problem.correlationId) {
+    return `${message} (Correlation ID: ${problem.correlationId})`;
+  }
+
+  if (message) {
+    return message;
+  }
+
+  if (problem.correlationId) {
+    return `Request failed. Correlation ID: ${problem.correlationId}`;
+  }
+
+  return "Request failed.";
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (contentType.includes("application/json")) {
+      const problem = (await response.json()) as ProblemDetails;
+      throw new Error(toApiErrorMessage(problem));
+    }
+
     const text = await response.text();
     throw new Error(text || `Request failed with ${response.status}`);
   }
@@ -44,6 +84,13 @@ export async function retryJob(id: string) {
   });
 
   if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (contentType.includes("application/json")) {
+      const problem = (await response.json()) as ProblemDetails;
+      throw new Error(toApiErrorMessage(problem));
+    }
+
     const text = await response.text();
     throw new Error(text || `Retry failed with ${response.status}`);
   }
