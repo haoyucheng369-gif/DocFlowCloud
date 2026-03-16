@@ -14,6 +14,7 @@ namespace DocFlowCloud.Worker;
 
 public sealed class StaleInboxRecoveryWorker : BackgroundService
 {
+    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
     // 当前恢复器只处理 Job consumer 的卡死消息。
     // Notification consumer 的处理逻辑较轻，先不做自动恢复编排。
     private const string ConsumerName = "DocFlowCloud.JobConsumer";
@@ -118,7 +119,7 @@ public sealed class StaleInboxRecoveryWorker : BackgroundService
             return;
         }
 
-        var originalMessage = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(originalOutbox.PayloadJson);
+        var originalMessage = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(originalOutbox.PayloadJson, JsonSerializerOptions);
         if (originalMessage is null || originalMessage.MessageId != inbox.MessageId)
         {
             // 原始消息格式损坏时，不能盲目重放，先明确落成失败，等待人工处理。

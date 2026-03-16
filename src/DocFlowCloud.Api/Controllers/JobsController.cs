@@ -1,3 +1,4 @@
+using DocFlowCloud.Api.Contracts;
 using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Jobs;
 using Microsoft.AspNetCore.Mvc;
@@ -42,11 +43,14 @@ public sealed class JobsController : ControllerBase
     }
 
     [HttpPost("document-to-pdf")]
+    [HttpPost("image-to-pdf")]
     [Consumes("multipart/form-data")]
-    public async Task<IActionResult> CreateDocumentToPdf([FromForm] IFormFile file, [FromForm] string? name, CancellationToken cancellationToken)
+    public async Task<IActionResult> CreateDocumentToPdf([FromForm] CreateDocumentToPdfForm request, CancellationToken cancellationToken)
     {
         // 新增的简单文档转换入口：
         // 当前支持 image、txt、md、html 四类输入，由 Worker 异步转成 PDF。
+        var file = request.File;
+
         if (file.Length == 0)
         {
             return BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]>
@@ -69,7 +73,7 @@ public sealed class JobsController : ControllerBase
         await stream.CopyToAsync(memoryStream, cancellationToken);
 
         var jobId = await _jobService.CreateDocumentToPdfAsync(
-            name,
+            request.Name,
             file.FileName,
             file.ContentType,
             memoryStream.ToArray(),

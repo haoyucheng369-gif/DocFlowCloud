@@ -15,6 +15,7 @@ namespace DocFlowCloud.NotificationService;
 
 public sealed class NotificationWorker : BackgroundService
 {
+    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
     // Notification consumer 和 Job consumer 处理的是同一个事件，
     // 但 Inbox 去重必须按消费者区分，所以这里要有独立的 ConsumerName。
     private const string ConsumerName = "DocFlowCloud.NotificationConsumer";
@@ -88,7 +89,7 @@ public sealed class NotificationWorker : BackgroundService
 
             try
             {
-                var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json)
+                var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json, JsonSerializerOptions)
                     ?? throw new InvalidOperationException("Notification message deserialization failed.");
 
                 using (LogContext.PushProperty("CorrelationId", message.CorrelationId))

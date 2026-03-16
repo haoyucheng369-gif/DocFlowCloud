@@ -20,6 +20,7 @@ namespace DocFlowCloud.Worker;
 
 public sealed class RabbitMqWorker : BackgroundService
 {
+    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
     // 同一个消息会被不同 consumer 分别处理，所以这里的消费者名称要固定，
     // Inbox 去重与 claim 抢占就是依赖 (MessageId, ConsumerName) 这一组唯一键。
     private const string ConsumerName = "DocFlowCloud.JobConsumer";
@@ -132,7 +133,7 @@ public sealed class RabbitMqWorker : BackgroundService
             try
             {
                 // 先把消息体还原成应用层契约对象，后面业务逻辑都围绕这个对象展开。
-                var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json)
+                var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json, JsonSerializerOptions)
                     ?? throw new InvalidOperationException("Message deserialization failed.");
 
                 // 把 CorrelationId 压进日志上下文，后续这条消息处理链上的日志就能串起来。
@@ -340,7 +341,7 @@ public sealed class RabbitMqWorker : BackgroundService
         {
             // 这里会尽量把失败状态落回数据库。
             // 即使后面 retry / DLQ 逻辑还要继续，数据库状态也不能一直卡在 Processing。
-            var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json);
+            var message = JsonSerializer.Deserialize<JobCreatedIntegrationMessage>(json, JsonSerializerOptions);
             if (message is null)
             {
                 return;
