@@ -1,100 +1,46 @@
-import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { getJob, getResultFileUrl, retryJob } from "../lib/api";
-import { formatDate } from "../lib/format";
-import type { Job } from "../types";
 import { StatusBadge } from "../components/StatusBadge";
+import { formatDate } from "../lib/format";
+import { getJob, getResultFileUrl, retryJob } from "../lib/api";
 
-// 任务详情页：查看单个任务的状态、结果和恢复操作。
+// 任务详情页：详情读取、轮询刷新和失败重试都交给 Query/Mutation 统一管理。
 export function JobDetailPage() {
   const { id = "" } = useParams();
-  const [job, setJob] = useState<Job | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [isRetrying, setIsRetrying] = useState(false);
+  const queryClient = useQueryClient();
 
-  // 加载详情：进入页面时读取任务详情。
-  useEffect(() => {
-    let isDisposed = false;
-
-    async function loadJob() {
-      try {
-        const response = await getJob(id);
-        if (!isDisposed) {
-          setJob(response);
-          setError(null);
-        }
-      } catch (error) {
-        if (!isDisposed) {
-          setError(
-            error instanceof Error ? error.message : "Failed to load the job."
-          );
-        }
-      } finally {
-        if (!isDisposed) {
-          setIsLoading(false);
-        }
-      }
+  // 详情查询：任务处于 Pending/Processing 时自动轮询，完成后停止刷新。
+  const jobQuery = useQuery({
+    queryKey: ["job", id],
+    queryFn: () => getJob(id),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "Pending" || status === "Processing" ? 3000 : false;
     }
+  });
 
-    void loadJob();
-
-    return () => {
-      isDisposed = true;
-    };
-  }, [id]);
-
-  // 轮询逻辑：任务仍在 Pending/Processing 时自动刷新，成功或失败后停止轮询。
-  useEffect(() => {
-    if (!job || (job.status !== "Pending" && job.status !== "Processing")) {
-      return;
+  // 重试 mutation：失败任务重新进入主流程，成功后刷新详情和列表缓存。
+  const retryMutation = useMutation({
+    mutationFn: () => retryJob(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["job", id] });
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
     }
+  });
 
-    const timer = window.setInterval(async () => {
-      try {
-        const response = await getJob(id);
-        setJob(response);
-      } catch (error) {
-        setError(
-          error instanceof Error ? error.message : "Failed to load the job."
-        );
-      }
-    }, 3000);
-
-    return () => window.clearInterval(timer);
-  }, [id, job]);
-
-  // 重试逻辑：仅允许失败任务重新进入主流程。
-  async function handleRetry() {
-    if (!job) {
-      return;
-    }
-
-    setIsRetrying(true);
-    setError(null);
-
-    try {
-      await retryJob(job.id);
-      const refreshed = await getJob(job.id);
-      setJob(refreshed);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Retry failed.");
-    } finally {
-      setIsRetrying(false);
-    }
-  }
-
-  if (isLoading) {
+  if (jobQuery.isPending) {
     return <p className="text-sm text-slate-600">Loading...</p>;
   }
 
-  if (!job) {
+  if (!jobQuery.data) {
     return (
       <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-        {error ?? "The requested job was not found."}
+        {jobQuery.error?.message ?? "The requested job was not found."}
       </div>
     );
   }
+
+  const job = jobQuery.data;
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
@@ -118,9 +64,15 @@ export function JobDetailPage() {
           </Link>
         </div>
 
-        {error ? (
+        {jobQuery.error ? (
           <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+            {jobQuery.error.message}
+          </div>
+        ) : null}
+
+        {retryMutation.error ? (
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {retryMutation.error.message}
           </div>
         ) : null}
 
@@ -163,8 +115,8 @@ export function JobDetailPage() {
             ) : null}
 
             <p>
-              Original file details are kept in the backend job payload and
-              processed asynchronously.
+              The backend stores input and output files through a storage provider
+              and keeps only storage keys inside the job payload/result.
             </p>
           </div>
         </div>
@@ -202,11 +154,11 @@ export function JobDetailPage() {
           {job.status === "Failed" ? (
             <button
               type="button"
-              disabled={isRetrying}
-              onClick={handleRetry}
+              disabled={retryMutation.isPending}
+              onClick={() => retryMutation.mutate()}
               className="inline-flex w-full items-center justify-center rounded-full border border-line px-5 py-3 text-sm font-semibold text-ink transition hover:bg-soft disabled:cursor-not-allowed disabled:text-slate-400"
             >
-              {isRetrying ? "Retrying..." : "Retry Failed Job"}
+              {retryMutation.isPending ? "Retrying..." : "Retry Failed Job"}
             </button>
           ) : null}
         </div>

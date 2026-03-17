@@ -1,31 +1,15 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { getJobs } from "../lib/api";
-import { formatDate } from "../lib/format";
-import type { Job } from "../types";
 import { StatusBadge } from "../components/StatusBadge";
+import { formatDate } from "../lib/format";
+import { getJobs } from "../lib/api";
 
-// 任务列表页：展示当前所有任务，方便快速查看处理状态和进入详情页。
+// 任务列表页：用 Query 管理服务端列表数据，统一 loading / error / success 状态。
 export function JobsPage() {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // 首次进入页面时拉取任务列表。
-  useEffect(() => {
-    async function loadJobs() {
-      try {
-        const response = await getJobs();
-        setJobs(response);
-      } catch {
-        setError("Failed to load jobs.");
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    void loadJobs();
-  }, []);
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: getJobs
+  });
 
   return (
     <section className="rounded-3xl border border-line bg-white p-8 shadow-sm">
@@ -47,16 +31,18 @@ export function JobsPage() {
         </Link>
       </div>
 
-      {isLoading ? <p className="mt-8 text-sm text-slate-600">Loading...</p> : null}
+      {jobsQuery.isPending ? (
+        <p className="mt-8 text-sm text-slate-600">Loading...</p>
+      ) : null}
 
-      {error ? (
+      {jobsQuery.error ? (
         <div className="mt-8 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+          {jobsQuery.error.message}
         </div>
       ) : null}
 
-      {!isLoading && !error ? (
-        jobs.length > 0 ? (
+      {jobsQuery.data ? (
+        jobsQuery.data.length > 0 ? (
           <div className="mt-8 overflow-hidden rounded-2xl border border-line">
             <table className="min-w-full divide-y divide-line text-sm">
               <thead className="bg-soft text-left text-slate-500">
@@ -69,7 +55,7 @@ export function JobsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-line bg-white">
-                {jobs.map((job) => (
+                {jobsQuery.data.map((job) => (
                   <tr key={job.id} className="align-middle">
                     <td className="px-5 py-4 font-medium text-ink">{job.name}</td>
                     <td className="px-5 py-4">

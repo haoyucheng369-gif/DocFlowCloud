@@ -1,38 +1,46 @@
-import { useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
+import { z } from "zod";
 import { createDocumentToPdf } from "../lib/api";
 
-// 创建任务页：负责上传文件并创建异步文档转 PDF 任务。
+const createJobSchema = z.object({
+  name: z.string().max(120, "Task name is too long.").optional(),
+  file: z
+    .any()
+    .refine((value) => value instanceof FileList && value.length > 0, "Please choose a file.")
+});
+
+type CreateJobFormValues = z.infer<typeof createJobSchema>;
+
+// 创建任务页：用 react-hook-form 管表单状态，用 mutation 负责提交异步任务。
 export function CreateJobPage() {
   const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // 提交逻辑：把文件和任务名交给后端，成功后跳转到详情页继续观察状态。
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!file) {
-      setError("Please choose a file.");
-      return;
+  const {
+    formState: { errors },
+    handleSubmit,
+    register,
+    watch
+  } = useForm<CreateJobFormValues>({
+    resolver: zodResolver(createJobSchema),
+    defaultValues: {
+      name: ""
     }
+  });
 
-    setIsSubmitting(true);
-    setError(null);
+  const selectedFile = watch("file")?.[0];
 
-    try {
-      const response = await createDocumentToPdf(file, name);
+  // 提交 mutation：上传文件并创建任务，成功后跳到详情页继续观察状态。
+  const createJobMutation = useMutation({
+    mutationFn: async (values: CreateJobFormValues) => {
+      const file = values.file[0] as File;
+      return createDocumentToPdf(file, values.name);
+    },
+    onSuccess: (response) => {
       navigate(`/jobs/${response.jobId}`);
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Failed to submit the job."
-      );
-    } finally {
-      setIsSubmitting(false);
     }
-  }
+  });
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
@@ -49,17 +57,22 @@ export function CreateJobPage() {
           the worker complete the conversion in the background.
         </p>
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+        <form
+          className="mt-8 space-y-6"
+          onSubmit={handleSubmit((values) => createJobMutation.mutate(values))}
+        >
           <div className="space-y-2">
             <label className="text-sm font-medium text-slate-700">
               Task Name
             </label>
             <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
+              {...register("name")}
               className="w-full rounded-2xl border border-line px-4 py-3 text-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
               placeholder="For example: Project overview document"
             />
+            {errors.name ? (
+              <p className="text-sm text-red-700">{errors.name.message}</p>
+            ) : null}
           </div>
 
           <div className="space-y-3">
@@ -68,32 +81,37 @@ export function CreateJobPage() {
             </label>
             <label className="flex cursor-pointer items-center justify-between rounded-2xl border border-dashed border-line bg-soft px-4 py-5 transition hover:border-accent/60">
               <span className="text-sm text-slate-600">
-                {file ? `Selected: ${file.name}` : "Click to choose a supported file"}
+                {selectedFile
+                  ? `Selected: ${selectedFile.name}`
+                  : "Click to choose a supported file"}
               </span>
               <span className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm">
                 Browse
               </span>
               <input
+                {...register("file")}
                 type="file"
                 className="hidden"
                 accept=".jpg,.jpeg,.png,.bmp,.gif,.webp,.txt,.md,.html,.htm,text/plain,text/markdown,text/html,image/*"
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               />
             </label>
+            {errors.file ? (
+              <p className="text-sm text-red-700">{errors.file.message?.toString()}</p>
+            ) : null}
           </div>
 
-          {error ? (
+          {createJobMutation.error ? (
             <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
+              {createJobMutation.error.message}
             </div>
           ) : null}
 
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={createJobMutation.isPending}
             className="inline-flex items-center justify-center rounded-full bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-accent/60"
           >
-            {isSubmitting ? "Submitting..." : "Submit Conversion Job"}
+            {createJobMutation.isPending ? "Submitting..." : "Submit Conversion Job"}
           </button>
         </form>
       </section>
