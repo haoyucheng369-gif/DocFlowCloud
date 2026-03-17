@@ -1,5 +1,6 @@
 using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
+using DocFlowCloud.Application.Abstractions.Storage;
 using DocFlowCloud.Application.Exceptions;
 using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Application.Messaging;
@@ -14,7 +15,11 @@ public sealed class JobServiceTests
     [Fact]
     public async Task RetryAsync_WhenJobMissing_ThrowsJobNotFoundException()
     {
-        var service = new JobService(new StubCorrelationContextAccessor(), new InMemoryJobRepository(), new InMemoryOutboxRepository());
+        var service = new JobService(
+            new StubCorrelationContextAccessor(),
+            new StubFileStorage(),
+            new InMemoryJobRepository(),
+            new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<JobNotFoundException>(() => service.RetryAsync(Guid.NewGuid()));
     }
@@ -26,7 +31,11 @@ public sealed class JobServiceTests
         var job = new Job("demo", "pdf", "{}");
         await repository.AddAsync(job);
 
-        var service = new JobService(new StubCorrelationContextAccessor(), repository, new InMemoryOutboxRepository());
+        var service = new JobService(
+            new StubCorrelationContextAccessor(),
+            new StubFileStorage(),
+            repository,
+            new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<InvalidJobStateException>(() => service.RetryAsync(job.Id));
     }
@@ -36,7 +45,11 @@ public sealed class JobServiceTests
     {
         var repository = new InMemoryJobRepository();
         var outboxRepository = new RecordingOutboxRepository();
-        var service = new JobService(new StubCorrelationContextAccessor(), repository, outboxRepository);
+        var service = new JobService(
+            new StubCorrelationContextAccessor(),
+            new StubFileStorage(),
+            repository,
+            outboxRepository);
 
         var jobId = await service.CreateAsync(new CreateJobRequest
         {
@@ -85,6 +98,23 @@ public sealed class JobServiceTests
         public string GetCorrelationId()
         {
             return "corr-123";
+        }
+    }
+
+    private sealed class StubFileStorage : IFileStorage
+    {
+        public Task<byte[]?> ReadAsync(string storagePath, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<byte[]?>(null);
+        }
+
+        public Task<string> SaveAsync(
+            string category,
+            string fileName,
+            byte[] content,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult($"{category}/{fileName}");
         }
     }
 

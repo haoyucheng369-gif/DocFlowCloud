@@ -1,5 +1,6 @@
 using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Processing;
+using DocFlowCloud.Application.Abstractions.Storage;
 using DocFlowCloud.Application.Jobs;
 using Microsoft.Extensions.Logging;
 using QuestPDF.Fluent;
@@ -13,19 +14,21 @@ using System.Text.RegularExpressions;
 namespace DocFlowCloud.Worker;
 
 // 副作用执行器：
-// 这里承载真正的“任务处理逻辑”。当前实现的是简单文档转 PDF，
-// 支持图片、txt、md、html 四类输入。
+// 真正承载“文档转 PDF”的业务逻辑。
+// 当前改成先从存储层读取原文件，再把 PDF 结果写回存储层。
 public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
+    private readonly IFileStorage _fileStorage;
     private readonly ILogger<JobSideEffectExecutor> _logger;
 
-    public JobSideEffectExecutor(ILogger<JobSideEffectExecutor> logger)
+    public JobSideEffectExecutor(IFileStorage fileStorage, ILogger<JobSideEffectExecutor> logger)
     {
+        _fileStorage = fileStorage;
         _logger = logger;
     }
 
-    public Task<string> ExecuteAsync(
+    public async Task<string> ExecuteAsync(
         Guid jobId,
         string jobType,
         string payloadJson,
@@ -33,7 +36,6 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
         string correlationId,
         CancellationToken cancellationToken = default)
     {
-        // 先记录本次处理的关键上下文，方便以后通过日志排查问题。
         _logger.LogInformation(
             "Executing external side effect. JobId: {JobId}, JobType: {JobType}, IdempotencyKey: {IdempotencyKey}, CorrelationId: {CorrelationId}",
             jobId,
@@ -41,28 +43,36 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
             idempotencyKey,
             correlationId);
 
-        // 这里演示“如果以后要调第三方 HTTP 服务，哪些技术头需要继续传下去”。
         var outboundHeaders = new Dictionary<string, string>
         {
             [CorrelationConstants.HeaderName] = correlationId
         };
 
-        // 当前版本只支持简单文档转 PDF，其他类型直接视为不支持。
         if (!string.Equals(jobType, JobService.DocumentToPdfJobType, StringComparison.Ordinal))
         {
             throw new NotSupportedException($"Unsupported job type '{jobType}'.");
         }
 
-        // 反序列化任务 payload，取出上传的原始文件内容。
         var payload = JsonSerializer.Deserialize<DocumentToPdfJobPayload>(payloadJson, JsonSerializerOptions)
             ?? throw new JsonException("DocumentToPdf payload is invalid.");
 
-        var fileBytes = Convert.FromBase64String(payload.FileBytesBase64);
+        // 处理阶段从输入 storage key 读取原文件，再按文件类型生成 PDF。
+        var fileBytes = await _fileStorage.ReadAsync(payload.InputStorageKey, cancellationToken)
+            ?? throw new FileNotFoundException(
+                $"Input file '{payload.InputStorageKey}' was not found in storage.");
+
         var pdfBytes = GeneratePdf(payload, fileBytes);
+        var outputFileName = $"{Path.GetFileNameWithoutExtension(payload.OriginalFileName)}.pdf";
+        var outputStorageKey = await _fileStorage.SaveAsync(
+            "results",
+            outputFileName,
+            pdfBytes,
+            cancellationToken);
+
         var result = new DocumentToPdfJobResult
         {
-            OutputFileName = $"{Path.GetFileNameWithoutExtension(payload.OriginalFileName)}.pdf",
-            PdfBytesBase64 = Convert.ToBase64String(pdfBytes),
+            OutputFileName = outputFileName,
+            OutputStorageKey = outputStorageKey,
             GeneratedAtUtc = DateTime.UtcNow
         };
 
@@ -71,7 +81,6 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
             jobId,
             result.OutputFileName);
 
-        // 把结果重新序列化成结构化 JSON，后面会写回 Job.ResultJson。
         var resultJson = JsonSerializer.Serialize(new
         {
             generatedAtUtc = result.GeneratedAtUtc,
@@ -81,16 +90,14 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
             correlationId,
             outboundHeaders,
             outputFileName = result.OutputFileName,
-            pdfBytesBase64 = result.PdfBytesBase64
+            outputStorageKey = result.OutputStorageKey
         }, JsonSerializerOptions);
 
-        return Task.FromResult(resultJson);
+        return resultJson;
     }
 
     private static byte[] GeneratePdf(DocumentToPdfJobPayload payload, byte[] fileBytes)
     {
-        // 当前按文件类型分支：
-        // 图片直接嵌入 PDF；文本类先提取纯文本再排版到 PDF。
         return Document.Create(container =>
         {
             container.Page(page =>

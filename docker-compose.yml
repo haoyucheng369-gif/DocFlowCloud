@@ -47,6 +47,8 @@ services:
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
+      Storage__Provider: Local
+      Storage__Local__RootPath: /shared-storage
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -58,6 +60,7 @@ services:
       - "8080:8080"
     volumes:
       - ./logs/api:/app/logs
+      - ./shared-storage:/shared-storage
 
   worker:
     build:
@@ -69,6 +72,8 @@ services:
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
+      Storage__Provider: Local
+      Storage__Local__RootPath: /shared-storage
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -78,6 +83,7 @@ services:
         condition: service_healthy
     volumes:
       - ./logs/worker:/app/logs
+      - ./shared-storage:/shared-storage
 
   notification-service:
     build:
@@ -89,6 +95,8 @@ services:
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
+      Storage__Provider: Local
+      Storage__Local__RootPath: /shared-storage
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -98,6 +106,7 @@ services:
         condition: service_healthy
     volumes:
       - ./logs/notification:/app/logs
+      - ./shared-storage:/shared-storage
 
   web:
     build:
