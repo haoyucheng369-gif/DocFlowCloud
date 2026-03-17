@@ -96,6 +96,28 @@ export async function retryJob(id: string) {
   }
 }
 
-export function getResultFileUrl(id: string) {
-  return `${API_BASE_URL}/api/jobs/${id}/result-file`;
+export async function downloadResultFile(id: string) {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${id}/result-file`);
+
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+
+    if (contentType.includes("application/json")) {
+      const problem = (await response.json()) as ProblemDetails;
+      throw new Error(toApiErrorMessage(problem));
+    }
+
+    const text = await response.text();
+    throw new Error(text || `Download failed with ${response.status}`);
+  }
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+  const fileName = fileNameMatch?.[1] ?? `job-${id}.pdf`;
+  const blob = await response.blob();
+
+  return {
+    blob,
+    fileName
+  };
 }

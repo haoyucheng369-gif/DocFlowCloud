@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { StatusBadge } from "../components/StatusBadge";
+import { useToast } from "../components/ToastProvider";
 import { formatDate } from "../lib/format";
-import { getJob, getResultFileUrl, retryJob } from "../lib/api";
+import { downloadResultFile, getJob, retryJob } from "../lib/api";
 
 // 任务详情页：详情读取、轮询刷新和失败重试都交给 Query/Mutation 统一管理。
 export function JobDetailPage() {
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   // 详情查询：任务处于 Pending/Processing 时自动轮询，完成后停止刷新。
   const jobQuery = useQuery({
@@ -23,8 +25,49 @@ export function JobDetailPage() {
   const retryMutation = useMutation({
     mutationFn: () => retryJob(id),
     onSuccess: async () => {
+      showToast({
+        type: "success",
+        title: "Retry started.",
+        description: "The failed job has been queued again."
+      });
       await queryClient.invalidateQueries({ queryKey: ["job", id] });
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (error) => {
+      showToast({
+        type: "error",
+        title: "Failed to retry job.",
+        description: error.message
+      });
+    }
+  });
+
+  // 下载 mutation：
+  // 通过前端主动拉取 blob 并触发浏览器下载，这样成功和失败都能统一显示 toast。
+  const downloadMutation = useMutation({
+    mutationFn: () => downloadResultFile(id),
+    onSuccess: ({ blob, fileName }) => {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fileName;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+
+      showToast({
+        type: "success",
+        title: "Download started.",
+        description: fileName
+      });
+    },
+    onError: (error) => {
+      showToast({
+        type: "error",
+        title: "Failed to download file.",
+        description: error.message
+      });
     }
   });
 
@@ -73,6 +116,12 @@ export function JobDetailPage() {
         {retryMutation.error ? (
           <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {retryMutation.error.message}
+          </div>
+        ) : null}
+
+        {downloadMutation.error ? (
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {downloadMutation.error.message}
           </div>
         ) : null}
 
@@ -143,12 +192,16 @@ export function JobDetailPage() {
 
         <div className="mt-8 space-y-3">
           {job.status === "Succeeded" ? (
-            <a
-              href={getResultFileUrl(job.id)}
-              className="inline-flex w-full items-center justify-center rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent/90"
+            <button
+              type="button"
+              onClick={() => downloadMutation.mutate()}
+              disabled={downloadMutation.isPending}
+              className="inline-flex w-full items-center justify-center rounded-full bg-accent px-5 py-3 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-accent/60"
             >
-              Download Converted PDF
-            </a>
+              {downloadMutation.isPending
+                ? "Preparing download..."
+                : "Download Converted PDF"}
+            </button>
           ) : null}
 
           {job.status === "Failed" ? (

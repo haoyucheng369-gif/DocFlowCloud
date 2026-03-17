@@ -1,15 +1,47 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { useEffect } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { StatusBadge } from "../components/StatusBadge";
+import { useToast } from "../components/ToastProvider";
 import { formatDate } from "../lib/format";
 import { getJobs } from "../lib/api";
 
-// 任务列表页：用 Query 管理服务端列表数据，统一 loading / error / success 状态。
+type JobsPageLocationState = {
+  createdJobCount?: number;
+};
+
+// 任务列表页：
+// 用 Query 管理服务端列表数据；
+// 同时接收创建页跳转时带来的 state，在列表页补一个明确的批量创建成功提示。
 export function JobsPage() {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
     queryFn: getJobs
   });
+
+  const { showToast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const locationState = location.state as JobsPageLocationState | null;
+
+  // 只在从创建页跳到列表页时提示一次，
+  // 提示完立刻 replace 当前 history state，避免刷新页面或返回时重复弹出。
+  useEffect(() => {
+    if (!locationState?.createdJobCount) {
+      return;
+    }
+
+    showToast({
+      type: "success",
+      title: `${locationState.createdJobCount} conversion jobs submitted.`,
+      description: "The jobs are now queued for background processing."
+    });
+
+    navigate(location.pathname, {
+      replace: true,
+      state: null
+    });
+  }, [location.pathname, locationState?.createdJobCount, navigate, showToast]);
 
   return (
     <section className="rounded-3xl border border-line bg-white p-8 shadow-sm">
