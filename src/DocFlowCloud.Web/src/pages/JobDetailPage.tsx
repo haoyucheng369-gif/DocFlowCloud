@@ -1,27 +1,60 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/ToastProvider";
 import { formatDate } from "../lib/format";
 import { downloadResultFile, getJob, retryJob } from "../lib/api";
+import { subscribeToJobUpdates } from "../lib/signalr";
 
-// 任务详情页：详情读取、轮询刷新和失败重试都交给 Query/Mutation 统一管理。
+// 任务详情页：
+// 详情数据仍由 TanStack Query 管理；
+// 但详情刷新时机交给 SignalR 事件驱动，收到当前 job 的状态变化时再刷新。
 export function JobDetailPage() {
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
+  const refreshTimerRef = useRef<number | null>(null);
 
-  // 详情查询：任务处于 Pending/Processing 时自动轮询，完成后停止刷新。
   const jobQuery = useQuery({
     queryKey: ["job", id],
-    queryFn: () => getJob(id),
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "Pending" || status === "Processing" ? 3000 : false;
-    }
+    queryFn: () => getJob(id)
   });
 
-  // 重试 mutation：失败任务重新进入主流程，成功后刷新详情和列表缓存。
+  // 当前这个 job 状态变化时，刷新详情和列表缓存。
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    void subscribeToJobUpdates(async (payload) => {
+      if (payload.jobId !== id) {
+        return;
+      }
+
+      // 详情页只关心当前 job，但状态变化可能在短时间内连续到达。
+      // 这里合并刷新，避免一次状态推进引发多次重复 GET。
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+
+      refreshTimerRef.current = window.setTimeout(async () => {
+        refreshTimerRef.current = null;
+        await queryClient.invalidateQueries({ queryKey: ["job", id] });
+        await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      }, 250);
+    }).then((cleanup) => {
+      unsubscribe = cleanup;
+    });
+
+    return () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+
+      unsubscribe?.();
+    };
+  }, [id, queryClient]);
+
   const retryMutation = useMutation({
     mutationFn: () => retryJob(id),
     onSuccess: async () => {
@@ -42,8 +75,6 @@ export function JobDetailPage() {
     }
   });
 
-  // 下载 mutation：
-  // 通过前端主动拉取 blob 并触发浏览器下载，这样成功和失败都能统一显示 toast。
   const downloadMutation = useMutation({
     mutationFn: () => downloadResultFile(id),
     onSuccess: ({ blob, fileName }) => {
@@ -159,7 +190,8 @@ export function JobDetailPage() {
 
             {(job.status === "Pending" || job.status === "Processing") ? (
               <p>
-                The job is still running. This page refreshes automatically.
+                The job is still running. This page refreshes automatically when the
+                backend pushes a status update.
               </p>
             ) : null}
 

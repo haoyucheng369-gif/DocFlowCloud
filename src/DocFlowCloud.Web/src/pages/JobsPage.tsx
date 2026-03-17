@@ -1,48 +1,45 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/ToastProvider";
 import { formatDate } from "../lib/format";
 import { getJobs } from "../lib/api";
+import { queryClient } from "../lib/queryClient";
+import { subscribeToJobUpdates } from "../lib/signalr";
 
 type JobsPageLocationState = {
   createdJobCount?: number;
 };
 
 // 任务列表页：
-// 用 Query 管理服务端列表数据；
-// 同时接收创建页跳转时带来的 state，在列表页补一个明确的批量创建成功提示。
+// 列表数据仍由 TanStack Query 管理；
+// 但刷新时机不再靠前端轮询，而是由 SignalR 推送状态变化后再触发 query 失效。
 export function JobsPage() {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
-    queryFn: getJobs,
-    // 列表页在存在待处理任务时自动轮询，避免用户必须手动刷新才能看到状态推进。
-    refetchInterval: (query) => {
-      const jobs = query.state.data;
-      if (!jobs || jobs.length === 0) {
-        return false;
-      }
-
-      const hasRunningJob = jobs.some(
-        (job) => job.status === "Pending" || job.status === "Processing"
-      );
-
-      return hasRunningJob ? 3000 : false;
-    }
+    queryFn: getJobs
   });
 
   const { showToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
   const locationState = location.state as JobsPageLocationState | null;
+  const hasShownCreatedToastRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
 
-  // 只在从创建页跳到列表页时提示一次，
-  // 提示完立刻 replace 当前 history state，避免刷新页面或返回时重复弹出。
+  // 批量创建任务后，在列表页统一弹一次成功提示。
   useEffect(() => {
     if (!locationState?.createdJobCount) {
+      hasShownCreatedToastRef.current = false;
       return;
     }
+
+    if (hasShownCreatedToastRef.current) {
+      return;
+    }
+
+    hasShownCreatedToastRef.current = true;
 
     showToast({
       type: "success",
@@ -55,6 +52,36 @@ export function JobsPage() {
       state: null
     });
   }, [location.pathname, locationState?.createdJobCount, navigate, showToast]);
+
+  // 订阅后端 Job 更新事件：
+  // 收到任意状态变化时，只需让 jobs 查询失效，Query 会重新拉取最新列表。
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    void subscribeToJobUpdates(async () => {
+      // SignalR 可能在短时间内连续推多条状态变化，这里做一个很轻的防抖，
+      // 把多次列表刷新合并成一次，避免 Network 面板看起来像轮询。
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+
+      refreshTimerRef.current = window.setTimeout(async () => {
+        refreshTimerRef.current = null;
+        await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      }, 250);
+    }).then((cleanup) => {
+      unsubscribe = cleanup;
+    });
+
+    return () => {
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+
+      unsubscribe?.();
+    };
+  }, []);
 
   return (
     <section className="rounded-3xl border border-line bg-white p-8 shadow-sm">

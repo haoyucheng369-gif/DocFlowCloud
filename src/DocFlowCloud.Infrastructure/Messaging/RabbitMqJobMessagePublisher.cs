@@ -104,6 +104,18 @@ public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
             autoDelete: false,
             arguments: null);
         channel.QueueBind(_settings.NotificationQueueName, _settings.TopicExchangeName, _settings.NotificationQueueBindingKey);
+
+        // 实时状态更新事件队列，供 API 订阅后再转成 SignalR 推送。
+        channel.QueueDeclare(
+            queue: _settings.JobStatusUpdatesQueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: null);
+        channel.QueueBind(
+            _settings.JobStatusUpdatesQueueName,
+            _settings.TopicExchangeName,
+            _settings.JobStatusUpdatesBindingKey);
     }
 
     private string ResolveRoutingKey(string messageType)
@@ -113,6 +125,7 @@ public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
         return messageType switch
         {
             nameof(Application.Messaging.JobCreatedIntegrationMessage) => _settings.JobCreatedRoutingKey,
+            nameof(Application.Messaging.JobStatusChangedIntegrationMessage) => _settings.JobStatusChangedRoutingKey,
             _ => throw new NotSupportedException($"Unsupported integration message type '{messageType}'.")
         };
     }

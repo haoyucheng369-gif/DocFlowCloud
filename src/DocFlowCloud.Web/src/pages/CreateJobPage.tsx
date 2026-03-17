@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router-dom";
 import { z } from "zod";
@@ -20,12 +20,13 @@ const createJobSchema = z.object({
 type CreateJobFormValues = z.infer<typeof createJobSchema>;
 
 // 创建任务页：
-// 支持普通选择、多文件选择和拖拽上传。后端当前仍是单文件接口，
-// 所以前端会把多文件拆成多次请求，分别创建多个异步转换任务。
+// 支持点击选择、多文件选择和拖拽上传。
+// 后端当前仍是单文件接口，所以前端会把多文件拆成多次请求，分别创建多个任务。
 export function CreateJobPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
     formState: { errors },
@@ -44,23 +45,24 @@ export function CreateJobPage() {
   const watchedFiles = watch("file") as FileList | undefined;
   const selectedFiles = watchedFiles ? Array.from(watchedFiles) : [];
 
-  // 提交 mutation：
-  // 单文件时保留自定义任务名；
-  // 多文件时逐个创建任务，并让每个任务默认使用各自文件名，避免一个名字对应多条任务。
+  // 多文件上传时逐个创建转换任务；
+  // 单文件时保留输入的任务名，多文件时默认让每个任务对应各自文件名。
   const createJobMutation = useMutation({
     mutationFn: async (values: CreateJobFormValues) => {
       const files = Array.from(values.file as FileList);
 
-      const responses = await Promise.all(
+      return await Promise.all(
         files.map((file, index) =>
           createDocumentToPdf(
             file,
-            files.length === 1 ? values.name : values.name?.trim() ? `${values.name.trim()} ${index + 1}` : undefined
+            files.length === 1
+              ? values.name
+              : values.name?.trim()
+                ? `${values.name.trim()} ${index + 1}`
+                : undefined
           )
         )
       );
-
-      return responses;
     },
     onSuccess: (responses) => {
       if (responses.length === 1) {
@@ -89,8 +91,7 @@ export function CreateJobPage() {
     }
   });
 
-  // 统一处理文件选择和拖拽后的 FileList 回填，
-  // 这样表单校验和页面显示都走同一套状态。
+  // 统一回填文件选择结果，保证表单校验和页面显示共用同一份状态。
   function applyFiles(fileList: FileList | null) {
     setValue("file", fileList, {
       shouldDirty: true,
@@ -99,8 +100,7 @@ export function CreateJobPage() {
     });
   }
 
-  // 拖拽区域只负责接收文件，不直接提交；
-  // 真正提交仍然走表单，保持错误提示和 mutation 状态一致。
+  // 拖拽上传只负责接收文件，真正提交仍由表单统一触发。
   function handleDrop(files: FileList | null) {
     setIsDragging(false);
     applyFiles(files);
@@ -153,12 +153,15 @@ export function CreateJobPage() {
             <label className="text-sm font-medium text-slate-700">
               Choose Files
             </label>
-            <label
+
+            <div
               className={`flex cursor-pointer flex-col gap-3 rounded-2xl border border-dashed px-4 py-6 transition ${
                 isDragging
                   ? "border-accent bg-accent/5"
                   : "border-line bg-soft hover:border-accent/60"
               }`}
+              role="button"
+              tabIndex={0}
               onDragEnter={(event) => {
                 event.preventDefault();
                 setIsDragging(true);
@@ -175,21 +178,35 @@ export function CreateJobPage() {
                 event.preventDefault();
                 handleDrop(event.dataTransfer.files);
               }}
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
             >
               <div className="flex items-center justify-between gap-4">
                 <span className="text-sm text-slate-600">{selectedLabel}</span>
-                <span className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm">
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
+                >
                   Browse
-                </span>
+                </button>
               </div>
 
               {selectedFiles.length > 0 ? (
                 <ul className="space-y-1 text-sm text-slate-600">
                   {selectedFiles.slice(0, 5).map((file) => (
-                    <li key={`${file.name}-${file.lastModified}`}>• {file.name}</li>
+                    <li key={`${file.name}-${file.lastModified}`}>- {file.name}</li>
                   ))}
                   {selectedFiles.length > 5 ? (
-                    <li>• ...and {selectedFiles.length - 5} more</li>
+                    <li>- ...and {selectedFiles.length - 5} more</li>
                   ) : null}
                 </ul>
               ) : (
@@ -200,6 +217,10 @@ export function CreateJobPage() {
 
               <input
                 {...fileRegistration}
+                ref={(element) => {
+                  fileRegistration.ref(element);
+                  fileInputRef.current = element;
+                }}
                 type="file"
                 className="hidden"
                 multiple
@@ -209,7 +230,8 @@ export function CreateJobPage() {
                   applyFiles(event.target.files);
                 }}
               />
-            </label>
+            </div>
+
             {errors.file ? (
               <p className="text-sm text-red-700">{errors.file.message?.toString()}</p>
             ) : null}
@@ -245,7 +267,8 @@ export function CreateJobPage() {
             storage.
           </li>
           <li>
-            5. The frontend polls job status and downloads each PDF after success.
+            5. The frontend refreshes list/detail views when SignalR pushes job
+            status changes.
           </li>
         </ol>
       </aside>

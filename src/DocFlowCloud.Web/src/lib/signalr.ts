@@ -1,0 +1,60 @@
+import {
+  HubConnection,
+  HubConnectionBuilder,
+  HubConnectionState,
+  LogLevel
+} from "@microsoft/signalr";
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.toString() ?? "http://localhost:8080";
+
+type JobUpdatedPayload = {
+  jobId: string;
+  status: string;
+  retryCount: number;
+};
+
+let connection: HubConnection | null = null;
+let startPromise: Promise<HubConnection> | null = null;
+
+async function ensureConnection() {
+  if (connection) {
+    if (connection.state === HubConnectionState.Disconnected && !startPromise) {
+      startPromise = connection.start().then(() => connection!);
+      await startPromise.finally(() => {
+        startPromise = null;
+      });
+    }
+
+    return connection;
+  }
+
+  connection = new HubConnectionBuilder()
+    // 测试环境后端当前使用 wildcard CORS，这里关闭 credentials，
+    // 避免 SignalR negotiate 请求因为浏览器的 CORS 规则被拦截。
+    .withUrl(`${API_BASE_URL}/hubs/jobs`, {
+      withCredentials: false
+    })
+    .withAutomaticReconnect()
+    .configureLogging(LogLevel.Warning)
+    .build();
+
+  startPromise = connection.start().then(() => connection!);
+  await startPromise.finally(() => {
+    startPromise = null;
+  });
+
+  return connection;
+}
+
+// 统一订阅 Job 状态更新事件，供列表页和详情页复用。
+export async function subscribeToJobUpdates(
+  handler: (payload: JobUpdatedPayload) => void
+) {
+  const hubConnection = await ensureConnection();
+  hubConnection.on("jobUpdated", handler);
+
+  return () => {
+    hubConnection.off("jobUpdated", handler);
+  };
+}

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using DocFlowCloud.Application.Abstractions.Messaging;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Abstractions.Processing;
 using DocFlowCloud.Application.Exceptions;
@@ -291,6 +292,13 @@ public sealed class RabbitMqWorker : BackgroundService
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+
+        await PublishJobStatusChangedAsync(
+            message.JobId,
+            JobStatus.Succeeded,
+            job.RetryCount,
+            message.CorrelationId,
+            cancellationToken);
     }
 
     private async Task HandleFailureAsync(
@@ -371,11 +379,49 @@ public sealed class RabbitMqWorker : BackgroundService
 
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+
+            if (job is not null && job.Status == JobStatus.Failed)
+            {
+                await PublishJobStatusChangedAsync(
+                    job.Id,
+                    JobStatus.Failed,
+                    job.RetryCount,
+                    message.CorrelationId,
+                    cancellationToken);
+            }
         }
         catch (Exception markFailedException)
         {
             _logger.LogError(markFailedException, "Failed to mark job and inbox as failed after processing error.");
         }
+    }
+
+    private async Task PublishJobStatusChangedAsync(
+        Guid jobId,
+        JobStatus status,
+        int retryCount,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var publisher = scope.ServiceProvider.GetRequiredService<IJobMessagePublisher>();
+
+        var message = new JobStatusChangedIntegrationMessage
+        {
+            MessageId = Guid.NewGuid(),
+            JobId = jobId,
+            Status = status.ToString(),
+            RetryCount = retryCount,
+            CorrelationId = correlationId,
+            OccurredAtUtc = DateTime.UtcNow
+        };
+
+        var payloadJson = JsonSerializer.Serialize(message, JsonSerializerOptions);
+
+        await publisher.PublishRawAsync(
+            nameof(JobStatusChangedIntegrationMessage),
+            payloadJson,
+            cancellationToken);
     }
 
     private int GetRetryCount(IBasicProperties? properties)

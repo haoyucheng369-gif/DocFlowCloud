@@ -1,5 +1,6 @@
 using DocFlowCloud.Api.Extensions;
 using DocFlowCloud.Api.Observability;
+using DocFlowCloud.Api.Realtime;
 using DocFlowCloud.Api.Validators;
 using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Jobs;
@@ -31,6 +32,7 @@ builder.Host.UseSerilog();
 // 注册 HTTP / API 相关服务。
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
+builder.Services.AddSignalR();
 builder.Services.AddProblemDetails();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateJobRequestValidator>();
@@ -58,6 +60,7 @@ builder.Services.AddSwaggerGen();
 // 注入 Infrastructure 和应用服务。
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JobService>();
+builder.Services.AddHostedService<JobStatusUpdatesConsumer>();
 
 var app = builder.Build();
 
@@ -73,6 +76,7 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapControllers();
+app.MapHub<JobUpdatesHub>("/hubs/jobs");
 
 app.Run();
 
