@@ -63,19 +63,13 @@ export function CreateJobPage() {
       return responses;
     },
     onSuccess: (responses) => {
-      showToast({
-        type: "success",
-        title:
-          responses.length === 1
-            ? "Conversion job submitted."
-            : `${responses.length} conversion jobs submitted.`,
-        description:
-          responses.length === 1
-            ? `Job ID: ${responses[0].jobId}`
-            : "The jobs are now queued for background processing."
-      });
-
       if (responses.length === 1) {
+        showToast({
+          type: "success",
+          title: "Conversion job submitted.",
+          description: `Job ID: ${responses[0].jobId}`
+        });
+
         navigate(`/jobs/${responses[0].jobId}`);
         return;
       }

@@ -16,7 +16,20 @@ type JobsPageLocationState = {
 export function JobsPage() {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
-    queryFn: getJobs
+    queryFn: getJobs,
+    // 列表页在存在待处理任务时自动轮询，避免用户必须手动刷新才能看到状态推进。
+    refetchInterval: (query) => {
+      const jobs = query.state.data;
+      if (!jobs || jobs.length === 0) {
+        return false;
+      }
+
+      const hasRunningJob = jobs.some(
+        (job) => job.status === "Pending" || job.status === "Processing"
+      );
+
+      return hasRunningJob ? 3000 : false;
+    }
   });
 
   const { showToast } = useToast();

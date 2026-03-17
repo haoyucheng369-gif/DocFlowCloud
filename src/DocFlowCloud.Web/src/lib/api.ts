@@ -2,7 +2,7 @@ import type { CreateJobResponse, Job } from "../types";
 
 // API 调用层：统一封装前端对后端的请求，页面组件只关心业务流程。
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.toString() ?? "http://localhost:5000";
+  import.meta.env.VITE_API_BASE_URL?.toString() ?? "http://localhost:8080";
 
 type ProblemDetails = {
   title?: string;
@@ -69,12 +69,16 @@ export async function createDocumentToPdf(file: File, name?: string) {
 }
 
 export async function getJobs() {
-  const response = await fetch(`${API_BASE_URL}/api/jobs`);
+  const response = await fetch(`${API_BASE_URL}/api/jobs`, {
+    cache: "no-store"
+  });
   return parseJson<Job[]>(response);
 }
 
 export async function getJob(id: string) {
-  const response = await fetch(`${API_BASE_URL}/api/jobs/${id}`);
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${id}`, {
+    cache: "no-store"
+  });
   return parseJson<Job>(response);
 }
 
@@ -97,7 +101,9 @@ export async function retryJob(id: string) {
 }
 
 export async function downloadResultFile(id: string) {
-  const response = await fetch(`${API_BASE_URL}/api/jobs/${id}/result-file`);
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${id}/result-file`, {
+    cache: "no-store"
+  });
 
   if (!response.ok) {
     const contentType = response.headers.get("content-type") ?? "";
