@@ -8,8 +8,8 @@ import { downloadResultFile, getJob, retryJob } from "../lib/api";
 import { subscribeToJobUpdates } from "../lib/signalr";
 
 // 任务详情页：
-// 详情数据仍由 TanStack Query 管理；
-// 但详情刷新时机交给 SignalR 事件驱动，收到当前 job 的状态变化时再刷新。
+// 详情数据仍然由 TanStack Query 管理，但刷新时机由 SignalR 驱动。
+// 当前页只关心当前 job 的状态变化，收到对应 jobUpdated 后再刷新详情和列表缓存。
 export function JobDetailPage() {
   const { id = "" } = useParams();
   const queryClient = useQueryClient();
@@ -22,6 +22,7 @@ export function JobDetailPage() {
   });
 
   // 当前这个 job 状态变化时，刷新详情和列表缓存。
+  // 同样加一个轻量防抖，避免短时间连续事件导致重复 GET。
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
 
@@ -30,8 +31,6 @@ export function JobDetailPage() {
         return;
       }
 
-      // 详情页只关心当前 job，但状态变化可能在短时间内连续到达。
-      // 这里合并刷新，避免一次状态推进引发多次重复 GET。
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
       }
@@ -188,7 +187,7 @@ export function JobDetailPage() {
               <p>{job.errorMessage || "The job failed."}</p>
             ) : null}
 
-            {(job.status === "Pending" || job.status === "Processing") ? (
+            {job.status === "Pending" || job.status === "Processing" ? (
               <p>
                 The job is still running. This page refreshes automatically when the
                 backend pushes a status update.

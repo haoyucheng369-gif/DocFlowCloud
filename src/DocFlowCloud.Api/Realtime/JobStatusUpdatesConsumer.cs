@@ -9,7 +9,8 @@ using RabbitMQ.Client.Events;
 namespace DocFlowCloud.Api.Realtime;
 
 // Job 状态变化消费者：
-// API 订阅 Worker 发出的 job.status.changed 事件，再通过 SignalR 推给前端。
+// API 进程订阅 Worker 发出的 job.status.changed 事件，
+// 再通过 SignalR 把状态变化广播给前端页面。
 public sealed class JobStatusUpdatesConsumer : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
@@ -44,6 +45,7 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
         _connection = factory.CreateConnection();
         _channel = _connection.CreateModel();
 
+        // 显式声明实时状态队列，确保 API 就算先启动也能自己把拓扑补齐。
         _channel.ExchangeDeclare(
             exchange: _settings.TopicExchangeName,
             type: ExchangeType.Topic,
@@ -82,9 +84,11 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
 
             try
             {
+                // 先把 MQ 里的消息还原成应用层消息契约。
                 var message = JsonSerializer.Deserialize<JobStatusChangedIntegrationMessage>(json, JsonSerializerOptions)
                     ?? throw new InvalidOperationException("Status change message deserialization failed.");
 
+                // 当前前端只需要一个轻量事件：哪个 Job 变了、变成什么状态。
                 await _hubContext.Clients.All.SendAsync(
                     "jobUpdated",
                     new

@@ -11,7 +11,7 @@ namespace DocFlowCloud.Application.Jobs;
 
 // 应用层服务：
 // 负责组织“创建任务、查询任务、下载结果、业务级重试”等用例流程。
-// 当前文档转 PDF 已经改成“文件进共享存储，数据库只存 storage key”。
+// 当前文档转 PDF 已改成“文件进入共享存储，数据库只存 storage key”。
 public sealed class JobService
 {
     public const string DocumentToPdfJobType = "DocumentToPdf";
@@ -36,6 +36,7 @@ public sealed class JobService
 
     public async Task<Guid> CreateAsync(CreateJobRequest request, CancellationToken cancellationToken = default)
     {
+        // 创建任务时，Job 和 Outbox 要一起写库，确保“业务记录”和“待发消息”一致。
         var job = new Job(request.Name, request.Type, request.PayloadJson);
 
         await _jobRepository.AddAsync(job, cancellationToken);
@@ -52,7 +53,7 @@ public sealed class JobService
         byte[] fileBytes,
         CancellationToken cancellationToken = default)
     {
-        // 创建阶段先把原文件保存到存储层，业务表里只保存逻辑 storage key。
+        // 创建阶段先把原文件写进存储层，业务表里只保存逻辑 storage key。
         var inputStorageKey = await _fileStorage.SaveAsync(
             "uploads",
             originalFileName,
@@ -90,7 +91,7 @@ public sealed class JobService
 
     public async Task<JobResultFileDto?> GetResultFileAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        // 下载结果时按 output storage key 去存储层读取 PDF。
+        // 下载结果时，按 output storage key 去存储层读 PDF。
         var job = await _jobRepository.GetByIdAsync(id, cancellationToken);
         if (job is null ||
             job.Type != DocumentToPdfJobType ||
@@ -149,6 +150,7 @@ public sealed class JobService
 
     public async Task RetryAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
+        // 业务级重试：先把状态从 Failed 拉回 Pending，再补一条新的 outbox 消息。
         var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
             ?? throw new JobNotFoundException(jobId);
 

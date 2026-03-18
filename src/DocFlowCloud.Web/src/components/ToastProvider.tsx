@@ -30,7 +30,7 @@ type ToastContextValue = {
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 // 全局 toast provider：
-// 负责统一管理操作提示，让创建、重试、下载等行为跨页面跳转时也能显示反馈。
+// 统一管理操作反馈，让创建、重试、下载等行为跨页面跳转时也能显示提示。
 export function ToastProvider({ children }: PropsWithChildren) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const idRef = useRef(1);

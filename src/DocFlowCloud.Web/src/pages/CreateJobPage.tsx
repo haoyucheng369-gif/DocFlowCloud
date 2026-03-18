@@ -9,19 +9,14 @@ import { createDocumentToPdf } from "../lib/api";
 
 const createJobSchema = z.object({
   name: z.string().max(120, "Task name is too long.").optional(),
-  file: z
-    .any()
-    .refine(
-      (value) => value instanceof FileList && value.length > 0,
-      "Please choose at least one file."
-    )
+  files: z.array(z.instanceof(File)).min(1, "Please choose at least one file.")
 });
 
 type CreateJobFormValues = z.infer<typeof createJobSchema>;
 
 // 创建任务页：
-// 支持点击选择、多文件选择和拖拽上传。
-// 后端当前仍是单文件接口，所以前端会把多文件拆成多次请求，分别创建多个任务。
+// 统一把拖拽和点击选择都收敛到 File[]，避免 FileList 在不同交互路径下表现不一致。
+// 后端当前仍是单文件接口，所以前端会把多文件拆成多个请求，分别创建多个任务。
 export function CreateJobPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
@@ -37,25 +32,22 @@ export function CreateJobPage() {
   } = useForm<CreateJobFormValues>({
     resolver: zodResolver(createJobSchema),
     defaultValues: {
-      name: ""
+      name: "",
+      files: []
     }
   });
 
-  const fileRegistration = register("file");
-  const watchedFiles = watch("file") as FileList | undefined;
-  const selectedFiles = watchedFiles ? Array.from(watchedFiles) : [];
+  const selectedFiles = watch("files") ?? [];
 
-  // 多文件上传时逐个创建转换任务；
-  // 单文件时保留输入的任务名，多文件时默认让每个任务对应各自文件名。
+  // 多文件上传时逐个创建转换任务。
+  // 单文件时保留输入的任务名；多文件时自动给每个任务补序号。
   const createJobMutation = useMutation({
     mutationFn: async (values: CreateJobFormValues) => {
-      const files = Array.from(values.file as FileList);
-
       return await Promise.all(
-        files.map((file, index) =>
+        values.files.map((file, index) =>
           createDocumentToPdf(
             file,
-            files.length === 1
+            values.files.length === 1
               ? values.name
               : values.name?.trim()
                 ? `${values.name.trim()} ${index + 1}`
@@ -91,9 +83,9 @@ export function CreateJobPage() {
     }
   });
 
-  // 统一回填文件选择结果，保证表单校验和页面显示共用同一份状态。
+  // 统一处理文件选择结果，确保点击选择和拖拽上传共用同一份表单状态。
   function applyFiles(fileList: FileList | null) {
-    setValue("file", fileList, {
+    setValue("files", fileList ? Array.from(fileList) : [], {
       shouldDirty: true,
       shouldTouch: true,
       shouldValidate: true
@@ -142,7 +134,8 @@ export function CreateJobPage() {
               placeholder="For example: Project overview document"
             />
             <p className="text-xs text-slate-500">
-              Optional for a single file. When multiple files are uploaded, each file becomes its own job.
+              Optional for a single file. When multiple files are uploaded, each
+              file becomes its own job.
             </p>
             {errors.name ? (
               <p className="text-sm text-red-700">{errors.name.message}</p>
@@ -211,29 +204,27 @@ export function CreateJobPage() {
                 </ul>
               ) : (
                 <p className="text-xs text-slate-500">
-                  Drag and drop files here, or click to choose multiple supported files.
+                  Drag and drop files here, or click to choose multiple supported
+                  files.
                 </p>
               )}
 
               <input
-                {...fileRegistration}
-                ref={(element) => {
-                  fileRegistration.ref(element);
-                  fileInputRef.current = element;
-                }}
+                ref={fileInputRef}
                 type="file"
                 className="hidden"
                 multiple
                 accept=".jpg,.jpeg,.png,.bmp,.gif,.webp,.txt,.md,.html,.htm,text/plain,text/markdown,text/html,image/*"
                 onChange={(event) => {
-                  fileRegistration.onChange(event);
                   applyFiles(event.target.files);
                 }}
               />
             </div>
 
-            {errors.file ? (
-              <p className="text-sm text-red-700">{errors.file.message?.toString()}</p>
+            {errors.files ? (
+              <p className="text-sm text-red-700">
+                {errors.files.message?.toString()}
+              </p>
             ) : null}
           </div>
 

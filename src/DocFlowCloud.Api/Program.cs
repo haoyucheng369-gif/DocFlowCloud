@@ -13,7 +13,7 @@ using Serilog;
 const string FrontendCorsPolicy = "FrontendCorsPolicy";
 
 // API 进程入口：
-// 负责启动 HTTP 服务、配置日志、注册中间件和依赖注入。
+// 负责组装 HTTP API、SignalR、日志、中间件、基础设施依赖和实时消息消费者。
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate:
@@ -29,7 +29,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog();
 
-// 注册 HTTP / API 相关服务。
+// 注册 API 层常规能力：
+// 控制器、SignalR、ProblemDetails、FluentValidation、CorrelationId 访问器。
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
@@ -38,7 +39,8 @@ builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateJobRequestValidator>();
 builder.Services.AddScoped<ICorrelationContextAccessor, HttpCorrelationContextAccessor>();
 
-// 开发阶段允许本地 React 前端直接访问 API。
+// 当前项目主要用于本地开发和测试，前端来源暂时全部放开。
+// 后续上 testbed / production 时，可以改回按域名白名单放行。
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(FrontendCorsPolicy, policy =>
@@ -50,25 +52,27 @@ builder.Services.AddCors(options =>
     });
 });
 
-// 基础健康检查，当前重点检查数据库是否可连通。
+// 基础健康检查，当前重点检查数据库是否能连接。
 builder.Services.AddHealthChecks()
     .AddDbContextCheck<AppDbContext>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// 注入 Infrastructure 和应用服务。
+// 注册基础设施和应用服务。
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JobService>();
+
+// 这个后台消费者负责订阅 RabbitMQ 上的 job.status.changed 事件，
+// 再把状态变化转成 SignalR 推送给前端。
 builder.Services.AddHostedService<JobStatusUpdatesConsumer>();
 
 var app = builder.Build();
 
-// 先挂链路追踪和统一异常处理中间件。
+// 先挂链路追踪和全局异常处理中间件，保证后续日志和错误输出统一。
 app.UseCorrelationIdMiddleware();
 app.UseGlobalExceptionMiddleware();
 
-// 常规 API 中间件。
 app.UseSerilogRequestLogging();
 app.UseCors(FrontendCorsPolicy);
 app.MapHealthChecks("/health");
@@ -76,6 +80,8 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapControllers();
+
+// 前端通过这个 Hub 订阅 Job 状态更新。
 app.MapHub<JobUpdatesHub>("/hubs/jobs");
 
 app.Run();

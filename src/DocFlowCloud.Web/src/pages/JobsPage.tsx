@@ -13,8 +13,8 @@ type JobsPageLocationState = {
 };
 
 // 任务列表页：
-// 列表数据仍由 TanStack Query 管理；
-// 但刷新时机不再靠前端轮询，而是由 SignalR 推送状态变化后再触发 query 失效。
+// 列表数据由 TanStack Query 管理，实时更新由 SignalR 事件触发。
+// 当前实现不是固定轮询，而是收到 jobUpdated 后再让列表缓存失效并重新拉取。
 export function JobsPage() {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
@@ -53,14 +53,13 @@ export function JobsPage() {
     });
   }, [location.pathname, locationState?.createdJobCount, navigate, showToast]);
 
-  // 订阅后端 Job 更新事件：
-  // 收到任意状态变化时，只需让 jobs 查询失效，Query 会重新拉取最新列表。
+  // 订阅后端推送的 Job 状态变化事件。
+  // SignalR 可能在短时间内推多条事件，这里做一次轻量防抖，
+  // 避免列表因为连续状态变化而瞬间发太多次 GET。
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
 
     void subscribeToJobUpdates(async () => {
-      // SignalR 可能在短时间内连续推多条状态变化，这里做一个很轻的防抖，
-      // 把多次列表刷新合并成一次，避免 Network 面板看起来像轮询。
       if (refreshTimerRef.current !== null) {
         window.clearTimeout(refreshTimerRef.current);
       }

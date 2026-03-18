@@ -1,7 +1,7 @@
 namespace DocFlowCloud.Application.Messaging;
 
 // Job 状态变化事件：
-// 由 Worker 在任务状态发生变化后发布，供实时推送层订阅。
+// 由 Worker 在任务成功或失败后发布，供 API 实时层订阅并转成 SignalR 推送。
 public sealed class JobStatusChangedIntegrationMessage
 {
     public Guid MessageId { get; set; }
