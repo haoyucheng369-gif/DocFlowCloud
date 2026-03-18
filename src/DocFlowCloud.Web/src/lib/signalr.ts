@@ -41,6 +41,11 @@ async function ensureConnection() {
     .configureLogging(LogLevel.Warning)
     .build();
 
+  // 调试时如果在后端打断点，连接可能长时间收不到心跳。
+  // 这里把客户端超时放宽，减少因为调试暂停导致的误断线。
+  connection.serverTimeoutInMilliseconds = 120_000;
+  connection.keepAliveIntervalInMilliseconds = 15_000;
+
   startPromise = connection.start().then(() => connection!);
   await startPromise.finally(() => {
     startPromise = null;

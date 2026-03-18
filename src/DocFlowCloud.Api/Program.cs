@@ -33,7 +33,13 @@ builder.Host.UseSerilog();
 // 控制器、SignalR、ProblemDetails、FluentValidation、CorrelationId 访问器。
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddControllers();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+    // 调试 SignalR 时，后端如果因为断点暂停较久，默认超时会比较容易断线。
+    // 这里把服务端超时窗口放宽，减少调试阶段的假性断连。
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.ClientTimeoutInterval = TimeSpan.FromMinutes(2);
+});
 builder.Services.AddProblemDetails();
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateJobRequestValidator>();
