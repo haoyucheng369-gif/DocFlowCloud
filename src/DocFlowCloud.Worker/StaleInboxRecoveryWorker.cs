@@ -15,9 +15,11 @@ namespace DocFlowCloud.Worker;
 public sealed class StaleInboxRecoveryWorker : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
+
     // 当前恢复器只处理 Job consumer 的卡死消息。
     // Notification consumer 的处理逻辑较轻，先不做自动恢复编排。
     private const string ConsumerName = "DocFlowCloud.JobConsumer";
+    private const int MaxRecoveryRetryCount = 3;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly RabbitMqSettings _settings;
@@ -163,6 +165,36 @@ public sealed class StaleInboxRecoveryWorker : BackgroundService
             return;
         }
 
+        // 卡死恢复也需要上限控制，否则同一条消息如果一直卡死，就会不断 replay。
+        // 这里复用 Job.RetryCount 作为总重试计数，让“普通失败重试”和“卡死恢复重试”
+        // 都能在同一个上限里被约束住。
+        var projectedRetryCount = job.Status switch
+        {
+            JobStatus.Pending or JobStatus.Processing => job.RetryCount + 1,
+            JobStatus.Failed => job.RetryCount,
+            _ => job.RetryCount
+        };
+
+        if (projectedRetryCount >= MaxRecoveryRetryCount)
+        {
+            if (job.Status == JobStatus.Pending || job.Status == JobStatus.Processing)
+            {
+                job.MarkFailed("Processing timed out. Recovery retry limit reached.");
+            }
+
+            inbox.MarkFailed("Processing timed out. Recovery retry limit reached.");
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            _logger.LogWarning(
+                "Stale recovery retry limit reached for job {JobId}. InboxId: {InboxId}, RetryCount: {RetryCount}, Limit: {Limit}",
+                job.Id,
+                inbox.Id,
+                projectedRetryCount,
+                MaxRecoveryRetryCount);
+            return;
+        }
+
         if (job.Status == JobStatus.Pending || job.Status == JobStatus.Processing)
         {
             // Job 还没真正完成时，先把旧处理明确标成失败，再走 Retry 回到 Pending。
@@ -190,7 +222,7 @@ public sealed class StaleInboxRecoveryWorker : BackgroundService
             CreatedAtUtc = DateTime.UtcNow
         };
 
-        var replayPayload = JsonSerializer.Serialize(replayMessage);
+        var replayPayload = JsonSerializer.Serialize(replayMessage, JsonSerializerOptions);
         dbContext.OutboxMessages.Add(new OutboxMessage(nameof(JobCreatedIntegrationMessage), replayPayload));
 
         // 事务提交后，OutboxPublisherWorker 会按原来的机制把 replay 消息发出去。
@@ -198,8 +230,9 @@ public sealed class StaleInboxRecoveryWorker : BackgroundService
         await transaction.CommitAsync(cancellationToken);
 
         _logger.LogWarning(
-            "Recovered stale inbox {InboxId} for job {JobId}. A replay message was scheduled.",
+            "Recovered stale inbox {InboxId} for job {JobId}. Recovery replay scheduled. RecoveryRetryCount: {RetryCount}",
             inbox.Id,
-            job.Id);
+            job.Id,
+            projectedRetryCount);
     }
 }
