@@ -105,23 +105,164 @@ export function CreateJobPage() {
         ? `Selected: ${selectedFiles[0].name}`
         : `${selectedFiles.length} files selected`;
 
+  const stackGroups = [
+    {
+      title: "Frontend",
+      items: ["React", "TypeScript", "Tailwind", "TanStack Query", "SignalR"]
+    },
+    {
+      title: "Backend",
+      items: ["ASP.NET Core", "RabbitMQ", "Outbox / Inbox", "Retry / DLQ", "Local / Blob Storage"]
+    },
+    {
+      title: "Delivery",
+      items: ["Docker Compose", "Testbed / Production", "Health Checks", "Unit + Integration Tests"]
+    }
+  ];
+
   return (
-    <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-      <section className="rounded-3xl border border-line bg-white p-8 shadow-sm">
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-accent">
-          Async Conversion
+    <div className="grid gap-6 lg:grid-cols-[1.35fr_0.85fr]">
+      <section className="space-y-6">
+        <div className="rounded-3xl border border-line bg-white p-8 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent">
+            Document To PDF System
+          </p>
+          <div className="mt-4 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="space-y-4">
+              <h1 className="max-w-2xl text-3xl font-semibold tracking-tight text-ink">
+                Asynchronous document conversion with queue-driven processing and realtime status updates
+              </h1>
+              <p className="max-w-2xl text-sm leading-7 text-slate-600">
+                This homepage focuses on the system itself: upload a file, persist
+                a job and outbox message, process conversion in the background, and
+                push status updates back to the UI through SignalR.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {["Images", "Plain Text", "Markdown", "Simple HTML", "PDF Output"].map((item) => (
+                  <span
+                    key={item}
+                    className="inline-flex items-center rounded-full bg-soft px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-line"
+                  >
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-soft p-5 ring-1 ring-line">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Quick Summary
+              </p>
+              <dl className="mt-4 space-y-3 text-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <dt className="text-slate-500">Input</dt>
+                  <dd className="text-right font-medium text-slate-800">
+                    File upload with drag & drop or multi-select
+                  </dd>
+                </div>
+                <div className="flex items-start justify-between gap-4">
+                  <dt className="text-slate-500">Execution</dt>
+                  <dd className="text-right font-medium text-slate-800">
+                    API + RabbitMQ + Worker
+                  </dd>
+                </div>
+                <div className="flex items-start justify-between gap-4">
+                  <dt className="text-slate-500">Reliability</dt>
+                  <dd className="text-right font-medium text-slate-800">
+                    Outbox, Inbox, Retry, DLQ, Stale Recovery
+                  </dd>
+                </div>
+                <div className="flex items-start justify-between gap-4">
+                  <dt className="text-slate-500">Storage</dt>
+                  <dd className="text-right font-medium text-slate-800">
+                    Local now, Azure Blob ready
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
+          <section className="rounded-3xl border border-line bg-white p-6 shadow-sm">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
+                  Tech Stack
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-ink">
+                  Current building blocks
+                </h2>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-5">
+              {stackGroups.map((group) => (
+                <section key={group.title}>
+                  <h3 className="text-sm font-semibold text-slate-700">{group.title}</h3>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {group.items.map((item) => (
+                      <span
+                        key={item}
+                        className="inline-flex items-center rounded-full bg-soft px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-line"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-line bg-white p-6 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
+              Processing Flow
+            </p>
+            <h2 className="mt-2 text-xl font-semibold text-ink">
+              From upload to realtime update
+            </h2>
+
+            <div className="mt-5 grid gap-3">
+              {[
+                ["1", "Client Upload", "The browser sends one or more files to the API."],
+                ["2", "Job + Outbox", "The API stores the file, creates the job, and writes the outbox message."],
+                ["3", "Queue Publish", "OutboxPublisherWorker sends the message to RabbitMQ."],
+                ["4", "Worker Execute", "The worker claims the message, converts the file, and stores the PDF result."],
+                ["5", "Status Push", "A status-changed event reaches the API, then SignalR notifies the frontend."]
+              ].map(([step, title, description]) => (
+                <div
+                  key={step}
+                  className="grid grid-cols-[2.25rem_1fr] gap-4 rounded-2xl bg-soft px-4 py-4 ring-1 ring-line"
+                >
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-white">
+                    {step}
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <aside className="rounded-3xl border border-line bg-white p-6 shadow-sm lg:sticky lg:top-8 lg:self-start">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
+          Create Job
         </p>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-ink">
-          Upload one or more simple documents and convert them to PDF asynchronously
-        </h1>
-        <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-600">
-          This demo currently supports images, plain text, markdown, and simple
-          HTML files. The API creates jobs, writes outbox messages, and lets the
-          worker complete the conversion in the background.
+        <h2 className="mt-2 text-xl font-semibold text-ink">
+          Submit one or more files
+        </h2>
+        <p className="mt-3 text-sm leading-6 text-slate-600">
+          The upload panel is intentionally smaller here. The homepage explains the
+          system first, while the right side stays focused on creating tasks.
         </p>
 
         <form
-          className="mt-8 space-y-6"
+          className="mt-6 space-y-5"
           onSubmit={handleSubmit((values) => createJobMutation.mutate(values))}
         >
           <div className="space-y-2">
@@ -134,8 +275,7 @@ export function CreateJobPage() {
               placeholder="For example: Project overview document"
             />
             <p className="text-xs text-slate-500">
-              Optional for a single file. When multiple files are uploaded, each
-              file becomes its own job.
+              Optional for a single file. Multiple files become multiple jobs.
             </p>
             {errors.name ? (
               <p className="text-sm text-red-700">{errors.name.message}</p>
@@ -148,7 +288,7 @@ export function CreateJobPage() {
             </label>
 
             <div
-              className={`flex cursor-pointer flex-col gap-3 rounded-2xl border border-dashed px-4 py-6 transition ${
+              className={`flex cursor-pointer flex-col gap-3 rounded-2xl border border-dashed px-4 py-5 transition ${
                 isDragging
                   ? "border-accent bg-accent/5"
                   : "border-line bg-soft hover:border-accent/60"
@@ -204,8 +344,7 @@ export function CreateJobPage() {
                 </ul>
               ) : (
                 <p className="text-xs text-slate-500">
-                  Drag and drop files here, or click to choose multiple supported
-                  files.
+                  Drag files here or click to choose multiple supported files.
                 </p>
               )}
 
@@ -237,31 +376,11 @@ export function CreateJobPage() {
           <button
             type="submit"
             disabled={createJobMutation.isPending}
-            className="inline-flex items-center justify-center rounded-full bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-accent/60"
+            className="inline-flex w-full items-center justify-center rounded-full bg-accent px-6 py-3 text-sm font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-accent/60"
           >
             {createJobMutation.isPending ? "Submitting..." : "Submit Conversion Job"}
           </button>
         </form>
-      </section>
-
-      <aside className="rounded-3xl border border-line bg-white p-8 shadow-sm">
-        <h2 className="text-lg font-semibold text-ink">Current Flow</h2>
-        <ol className="mt-5 space-y-4 text-sm leading-7 text-slate-600">
-          <li>1. The client uploads one or more files and the API creates jobs and outbox entries.</li>
-          <li>2. OutboxPublisherWorker scans and publishes messages to RabbitMQ.</li>
-          <li>
-            3. Job Worker receives each message and claims processing through Inbox
-            and TryClaim.
-          </li>
-          <li>
-            4. Worker converts each document to PDF and writes the result back to
-            storage.
-          </li>
-          <li>
-            5. The frontend refreshes list/detail views when SignalR pushes job
-            status changes.
-          </li>
-        </ol>
       </aside>
     </div>
   );

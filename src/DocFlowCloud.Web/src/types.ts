@@ -17,3 +17,11 @@ export type CreateJobResponse = {
   jobId: string;
   correlationId: string;
 };
+
+export type SystemEnvironment = {
+  apiEnvironment: string;
+  databaseServer: string;
+  databaseName: string;
+  rabbitMqHost: string;
+  storageProvider: string;
+};

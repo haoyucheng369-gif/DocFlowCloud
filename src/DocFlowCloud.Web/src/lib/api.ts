@@ -1,4 +1,4 @@
-import type { CreateJobResponse, Job } from "../types";
+import type { CreateJobResponse, Job, SystemEnvironment } from "../types";
 
 // API 调用层：统一封装前端对后端的请求，页面组件只关心业务流程。
 const API_BASE_URL =
@@ -82,6 +82,14 @@ export async function getJob(id: string) {
   return parseJson<Job>(response);
 }
 
+export async function getSystemEnvironment() {
+  const response = await fetch(`${API_BASE_URL}/api/system/environment`, {
+    cache: "no-store"
+  });
+
+  return parseJson<SystemEnvironment>(response);
+}
+
 export async function retryJob(id: string) {
   const response = await fetch(`${API_BASE_URL}/api/jobs/${id}/retry`, {
     method: "POST"
@@ -127,3 +135,5 @@ export async function downloadResultFile(id: string) {
     fileName
   };
 }
+
+export { API_BASE_URL };
