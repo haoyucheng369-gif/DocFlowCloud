@@ -21,11 +21,37 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: "docflow"
+      RABBITMQ_DEFAULT_PASS: "docflow-local-pass"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  rabbitmq-init:
+    image: curlimages/curl:8.12.1
+    container_name: docflow-rabbitmq-init
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        curl --fail --silent --show-error -u docflow:docflow-local-pass http://rabbitmq:15672/api/overview > /dev/null
+        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-dev
+        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-testbed
+        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT \
+          -d "{\"configure\":\".*\",\"write\":\".*\",\"read\":\".*\"}" \
+          http://rabbitmq:15672/api/permissions/%2Fdocflow-dev/docflow
+        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT \
+          -d "{\"configure\":\".*\",\"write\":\".*\",\"read\":\".*\"}" \
+          http://rabbitmq:15672/api/permissions/%2Fdocflow-testbed/docflow
 
   migrator:
     build:
@@ -37,6 +63,8 @@ services:
     depends_on:
       sqlserver:
         condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
 
   api:
     build:
@@ -52,8 +80,8 @@ services:
         condition: service_completed_successfully
       sqlserver:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
     volumes:
@@ -73,8 +101,8 @@ services:
         condition: service_completed_successfully
       sqlserver:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
     volumes:
       - ./logs/worker:/app/logs
       - ./shared-storage:/shared-storage
@@ -92,8 +120,8 @@ services:
         condition: service_completed_successfully
       sqlserver:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
     volumes:
       - ./logs/notification:/app/logs
       - ./shared-storage:/shared-storage
@@ -111,3 +139,4 @@ services:
 
 volumes:
   sqlserver-data:
+  rabbitmq_data:

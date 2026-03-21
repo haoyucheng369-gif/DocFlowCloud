@@ -1,8 +1,14 @@
 services:
+  migrator:
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+
   api:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      RabbitMq__UserName: docflow
+      RabbitMq__Password: docflow-local-pass
       RabbitMq__VirtualHost: /docflow-dev
       Storage__Provider: Local
       Storage__Local__RootPath: /shared-storage
@@ -11,6 +17,8 @@ services:
     environment:
       DOTNET_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      RabbitMq__UserName: docflow
+      RabbitMq__Password: docflow-local-pass
       RabbitMq__VirtualHost: /docflow-dev
       Storage__Provider: Local
       Storage__Local__RootPath: /shared-storage
@@ -19,6 +27,8 @@ services:
     environment:
       DOTNET_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      RabbitMq__UserName: docflow
+      RabbitMq__Password: docflow-local-pass
       RabbitMq__VirtualHost: /docflow-dev
       Storage__Provider: Local
       Storage__Local__RootPath: /shared-storage
