@@ -1,0 +1,30 @@
+services:
+  api:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      RabbitMq__VirtualHost: /docflow-dev
+      Storage__Provider: Local
+      Storage__Local__RootPath: /shared-storage
+
+  worker:
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      RabbitMq__VirtualHost: /docflow-dev
+      Storage__Provider: Local
+      Storage__Local__RootPath: /shared-storage
+
+  notification-service:
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDevDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      RabbitMq__VirtualHost: /docflow-dev
+      Storage__Provider: Local
+      Storage__Local__RootPath: /shared-storage
+
+  web:
+    build:
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+        VITE_APP_ENV: development

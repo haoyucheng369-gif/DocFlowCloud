@@ -8,7 +8,9 @@ RUN npm ci
 COPY src/DocFlowCloud.Web ./
 
 ARG VITE_API_BASE_URL=http://localhost:8080
+ARG VITE_APP_ENV=development
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ENV VITE_APP_ENV=$VITE_APP_ENV
 
 RUN npm run build
 
