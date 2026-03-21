@@ -19,7 +19,8 @@ public sealed class RabbitMqConnectionProvider : IRabbitMqConnectionProvider
             HostName = settings.HostName,
             Port = settings.Port,
             UserName = settings.UserName,
-            Password = settings.Password
+            Password = settings.Password,
+            VirtualHost = settings.VirtualHost
         };
     }
 

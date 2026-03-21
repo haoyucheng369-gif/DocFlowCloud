@@ -23,5 +23,6 @@ export type SystemEnvironment = {
   databaseServer: string;
   databaseName: string;
   rabbitMqHost: string;
+  rabbitMqVirtualHost: string;
   storageProvider: string;
 };

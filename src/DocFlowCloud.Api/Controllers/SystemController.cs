@@ -32,7 +32,7 @@ public sealed class SystemController : ControllerBase
     [HttpGet("environment")]
     public ActionResult<SystemEnvironmentDto> GetEnvironment()
     {
-        // 这里故意只暴露“环境识别信息”，不把完整连接串直接返回给前端。
+        // 这里只故意只暴露“环境识别信息”，不把完整连接串直接返回给前端。
         var (databaseServer, databaseName) = ReadDatabaseTarget(
             _configuration.GetConnectionString("DefaultConnection"));
 
@@ -42,6 +42,7 @@ public sealed class SystemController : ControllerBase
             DatabaseServer = databaseServer,
             DatabaseName = databaseName,
             RabbitMqHost = _rabbitMqSettings.HostName,
+            RabbitMqVirtualHost = _rabbitMqSettings.VirtualHost,
             StorageProvider = _storageSettings.Provider
         });
     }

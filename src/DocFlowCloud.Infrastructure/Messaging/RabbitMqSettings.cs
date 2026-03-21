@@ -8,6 +8,7 @@ public sealed class RabbitMqSettings
     public int Port { get; set; } = 5672;
     public string UserName { get; set; } = "guest";
     public string Password { get; set; } = "guest";
+    public string VirtualHost { get; set; } = "/";
 
     public string TopicExchangeName { get; set; } = "docflow.events";
     public string QueueName { get; set; } = "docflow.jobs";

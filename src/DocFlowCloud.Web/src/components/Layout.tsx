@@ -52,7 +52,7 @@ function EnvironmentChip({
 }
 
 export function Layout({ children }: PropsWithChildren) {
-  // 在公共布局里固定展示环境来源信息，方便一眼确认当前前端页面到底连的是哪套后端和数据库。
+  // 在公共布局里固定显示环境来源信息，方便一眼确认当前前端页面到底连的是哪套后端和基础设施。
   const {
     data: environment,
     isLoading: isEnvironmentLoading,
@@ -105,7 +105,11 @@ export function Layout({ children }: PropsWithChildren) {
             />
             <EnvironmentChip
               label="RabbitMQ"
-              value={environment?.rabbitMqHost ?? environmentFallback}
+              value={
+                environment
+                  ? `${environment.rabbitMqHost} (${environment.rabbitMqVirtualHost})`
+                  : environmentFallback
+              }
             />
             <EnvironmentChip
               label="Storage"

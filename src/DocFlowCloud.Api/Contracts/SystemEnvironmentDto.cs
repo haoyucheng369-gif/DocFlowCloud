@@ -12,5 +12,7 @@ public sealed class SystemEnvironmentDto
 
     public string RabbitMqHost { get; init; } = string.Empty;
 
+    public string RabbitMqVirtualHost { get; init; } = string.Empty;
+
     public string StorageProvider { get; init; } = string.Empty;
 }
