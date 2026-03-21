@@ -5,42 +5,41 @@ using RabbitMQ.Client;
 namespace DocFlowCloud.Infrastructure.Messaging;
 
 // RabbitMQ 发布器：
-// 负责把 Outbox 里的消息真正发布到 topic exchange。
+// 负责把 Outbox 里的集成消息真正发布到 topic exchange。
+// 当前版本改成复用进程内长连接，只为每次发布创建短生命周期 channel。
 public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
 {
+    private readonly IRabbitMqConnectionProvider _connectionProvider;
+    private readonly IRabbitMqTopologyInitializer _topologyInitializer;
     private readonly RabbitMqSettings _settings;
 
-    public RabbitMqJobMessagePublisher(RabbitMqSettings settings)
+    public RabbitMqJobMessagePublisher(
+        IRabbitMqConnectionProvider connectionProvider,
+        IRabbitMqTopologyInitializer topologyInitializer,
+        RabbitMqSettings settings)
     {
+        _connectionProvider = connectionProvider;
+        _topologyInitializer = topologyInitializer;
         _settings = settings;
     }
 
     public Task PublishJobCreatedAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
-        // 当前项目统一通过 PublishRawAsync 发集成消息，这个旧接口保留但不再使用。
+        // 当前项目统一通过 PublishRawAsync 发布集成消息，这个旧接口保留但不再使用。
         throw new NotSupportedException("Use PublishRawAsync for integration messages.");
     }
 
     public Task PublishRawAsync(string messageType, string payloadJson, CancellationToken cancellationToken = default)
     {
-        // 发布器不依赖长期连接池，当前实现每次发布时临时创建连接和 channel。
-        var factory = new ConnectionFactory
-        {
-            HostName = _settings.HostName,
-            Port = _settings.Port,
-            UserName = _settings.UserName,
-            Password = _settings.Password
-        };
+        // 每次发布只创建一个短生命周期 channel；
+        // 长连接本身由连接提供器统一复用。
+        using var channel = _connectionProvider.GetConnection().CreateModel();
 
-        using var connection = factory.CreateConnection();
-        using var channel = connection.CreateModel();
-
-        // 先确保交换机、队列和绑定关系存在，再执行发布。
-        DeclareMessagingTopology(channel);
+        // 发布前确保拓扑存在，避免某个服务先启动时队列还没被声明。
+        _topologyInitializer.EnsureTopology(channel);
 
         var body = Encoding.UTF8.GetBytes(payloadJson);
         var properties = channel.CreateBasicProperties();
-        // 持久化消息，避免 broker 重启后直接丢失。
         properties.Persistent = true;
 
         channel.BasicPublish(
@@ -52,76 +51,9 @@ public sealed class RabbitMqJobMessagePublisher : IJobMessagePublisher
         return Task.CompletedTask;
     }
 
-    private void DeclareMessagingTopology(IModel channel)
-    {
-        // 这一段是“消息拓扑初始化”，负责把当前系统需要的 exchange / queue / binding 全部声明好。
-        channel.ExchangeDeclare(
-            exchange: _settings.TopicExchangeName,
-            type: ExchangeType.Topic,
-            durable: true,
-            autoDelete: false);
-
-        channel.QueueDeclare(
-            queue: _settings.DeadLetterQueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null);
-
-        var retryQueueArguments = new Dictionary<string, object>
-        {
-            // retry queue 里的消息 TTL 到期后，再通过 dead-letter 路由回主交换机。
-            ["x-dead-letter-exchange"] = _settings.TopicExchangeName,
-            ["x-dead-letter-routing-key"] = _settings.JobCreatedRoutingKey
-        };
-
-        channel.QueueDeclare(
-            queue: _settings.RetryQueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: retryQueueArguments);
-
-        var mainQueueArguments = new Dictionary<string, object>
-        {
-            // 主队列里最终处理不了的消息直接进入 DLQ。
-            ["x-dead-letter-exchange"] = string.Empty,
-            ["x-dead-letter-routing-key"] = _settings.DeadLetterQueueName
-        };
-
-        channel.QueueDeclare(
-            queue: _settings.QueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: mainQueueArguments);
-        channel.QueueBind(_settings.QueueName, _settings.TopicExchangeName, _settings.JobQueueBindingKey);
-
-        channel.QueueDeclare(
-            queue: _settings.NotificationQueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null);
-        channel.QueueBind(_settings.NotificationQueueName, _settings.TopicExchangeName, _settings.NotificationQueueBindingKey);
-
-        // 实时状态更新事件队列，供 API 订阅后再转成 SignalR 推送。
-        channel.QueueDeclare(
-            queue: _settings.JobStatusUpdatesQueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null);
-        channel.QueueBind(
-            _settings.JobStatusUpdatesQueueName,
-            _settings.TopicExchangeName,
-            _settings.JobStatusUpdatesBindingKey);
-    }
-
     private string ResolveRoutingKey(string messageType)
     {
-        // 当前只有 JobCreatedIntegrationMessage 这一种业务消息。
-        // 后面如果扩展更多事件类型，就在这里补映射关系。
+        // 这里负责把“消息类型”映射成“RabbitMQ routing key”。
         return messageType switch
         {
             nameof(Application.Messaging.JobCreatedIntegrationMessage) => _settings.JobCreatedRoutingKey,

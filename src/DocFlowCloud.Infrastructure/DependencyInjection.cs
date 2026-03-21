@@ -33,6 +33,11 @@ public static class DependencyInjection
         services.AddSingleton(rabbitMqSettings);
         services.AddSingleton(storageSettings);
 
+        // RabbitMQ 基础设施：
+        // 连接提供器负责复用长连接，拓扑初始化器负责统一声明队列结构。
+        services.AddSingleton<IRabbitMqConnectionProvider, RabbitMqConnectionProvider>();
+        services.AddSingleton<IRabbitMqTopologyInitializer, RabbitMqTopologyInitializer>();
+
         // 当前默认走 Local，共享目录适合本地联调；
         // 上云后把 Provider 切到 AzureBlob 即可。
         if (string.Equals(storageSettings.Provider, "Local", StringComparison.OrdinalIgnoreCase))
@@ -49,6 +54,7 @@ public static class DependencyInjection
                 $"Unsupported storage provider '{storageSettings.Provider}'. Supported values: Local, AzureBlob.");
         }
 
+        // 应用层仓储和消息发布器。
         services.AddScoped<IJobRepository, JobRepository>();
         services.AddScoped<IJobMessagePublisher, RabbitMqJobMessagePublisher>();
         services.AddScoped<IInboxMessageRepository, InboxMessageRepository>();

@@ -16,11 +16,13 @@ namespace DocFlowCloud.NotificationService;
 public sealed class NotificationWorker : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
-    // Notification consumer 和 Job consumer 处理的是同一个事件，
+    // Notification consumer 和 Job consumer 处理的是同一条事件，
     // 但 Inbox 去重必须按消费者区分，所以这里要有独立的 ConsumerName。
     private const string ConsumerName = "DocFlowCloud.NotificationConsumer";
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRabbitMqConnectionProvider _connectionProvider;
+    private readonly IRabbitMqTopologyInitializer _topologyInitializer;
     private readonly RabbitMqSettings _settings;
     private readonly ILogger<NotificationWorker> _logger;
 
@@ -29,10 +31,14 @@ public sealed class NotificationWorker : BackgroundService
 
     public NotificationWorker(
         IServiceScopeFactory scopeFactory,
+        IRabbitMqConnectionProvider connectionProvider,
+        IRabbitMqTopologyInitializer topologyInitializer,
         RabbitMqSettings settings,
         ILogger<NotificationWorker> logger)
     {
         _scopeFactory = scopeFactory;
+        _connectionProvider = connectionProvider;
+        _topologyInitializer = topologyInitializer;
         _settings = settings;
         _logger = logger;
     }
@@ -40,30 +46,9 @@ public sealed class NotificationWorker : BackgroundService
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         // Notification service 只订阅通知相关队列，不负责 retry / DLQ 编排。
-        var factory = new ConnectionFactory
-        {
-            HostName = _settings.HostName,
-            Port = _settings.Port,
-            UserName = _settings.UserName,
-            Password = _settings.Password
-        };
-
-        _connection = factory.CreateConnection();
+        _connection = _connectionProvider.GetConnection();
         _channel = _connection.CreateModel();
-
-        _channel.ExchangeDeclare(
-            exchange: _settings.TopicExchangeName,
-            type: ExchangeType.Topic,
-            durable: true,
-            autoDelete: false);
-
-        _channel.QueueDeclare(
-            queue: _settings.NotificationQueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null);
-        _channel.QueueBind(_settings.NotificationQueueName, _settings.TopicExchangeName, _settings.NotificationQueueBindingKey);
+        _topologyInitializer.EnsureTopology(_channel);
 
         // 控制并发抓取量，避免一次在本地积压太多未确认消息。
         _channel.BasicQos(prefetchSize: 0, prefetchCount: 10, global: false);
@@ -78,7 +63,6 @@ public sealed class NotificationWorker : BackgroundService
         if (_channel is null)
             throw new InvalidOperationException("RabbitMQ channel is not initialized.");
 
-        // 和 Job worker 一样，Notification consumer 也是事件驱动模式，不会主动轮询队列。
         var consumer = new EventingBasicConsumer(_channel);
 
         consumer.Received += async (_, eventArgs) =>
@@ -118,7 +102,7 @@ public sealed class NotificationWorker : BackgroundService
                     // 当前实现是模拟发邮件，后续可以替换成真实邮件服务或 webhook。
                     await sender.SendAsync(message, stoppingToken);
 
-                    // 通知成功后，补齐 Inbox 最终状态。
+                    // 通知成功后补齐 Inbox 最终状态。
                     inbox.MarkProcessed();
                     await inboxRepository.SaveChangesAsync(stoppingToken);
 
@@ -128,8 +112,6 @@ public sealed class NotificationWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                // 通知服务当前没有像 Job worker 一样做 retry / DLQ，
-                // 这里只记录错误并 ACK，避免队列里无限重复。
                 _logger.LogError(ex, "Error while processing notification message.");
                 _channel.BasicAck(eventArgs.DeliveryTag, false);
             }
@@ -146,10 +128,9 @@ public sealed class NotificationWorker : BackgroundService
 
     public override void Dispose()
     {
+        // 这里只释放当前 channel，长连接由 ConnectionProvider 统一管理。
         _channel?.Close();
-        _connection?.Close();
         _channel?.Dispose();
-        _connection?.Dispose();
         base.Dispose();
     }
 }

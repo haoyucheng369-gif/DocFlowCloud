@@ -15,6 +15,8 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
 
+    private readonly IRabbitMqConnectionProvider _connectionProvider;
+    private readonly IRabbitMqTopologyInitializer _topologyInitializer;
     private readonly RabbitMqSettings _settings;
     private readonly IHubContext<JobUpdatesHub> _hubContext;
     private readonly ILogger<JobStatusUpdatesConsumer> _logger;
@@ -23,10 +25,14 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
     private IModel? _channel;
 
     public JobStatusUpdatesConsumer(
+        IRabbitMqConnectionProvider connectionProvider,
+        IRabbitMqTopologyInitializer topologyInitializer,
         RabbitMqSettings settings,
         IHubContext<JobUpdatesHub> hubContext,
         ILogger<JobStatusUpdatesConsumer> logger)
     {
+        _connectionProvider = connectionProvider;
+        _topologyInitializer = topologyInitializer;
         _settings = settings;
         _hubContext = hubContext;
         _logger = logger;
@@ -34,35 +40,10 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
-        var factory = new ConnectionFactory
-        {
-            HostName = _settings.HostName,
-            Port = _settings.Port,
-            UserName = _settings.UserName,
-            Password = _settings.Password
-        };
-
-        _connection = factory.CreateConnection();
+        // API 侧消费者只需要拿到一个消费 channel，并确保状态更新队列拓扑存在。
+        _connection = _connectionProvider.GetConnection();
         _channel = _connection.CreateModel();
-
-        // 显式声明实时状态队列，确保 API 就算先启动也能自己把拓扑补齐。
-        _channel.ExchangeDeclare(
-            exchange: _settings.TopicExchangeName,
-            type: ExchangeType.Topic,
-            durable: true,
-            autoDelete: false);
-
-        _channel.QueueDeclare(
-            queue: _settings.JobStatusUpdatesQueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false,
-            arguments: null);
-
-        _channel.QueueBind(
-            _settings.JobStatusUpdatesQueueName,
-            _settings.TopicExchangeName,
-            _settings.JobStatusUpdatesBindingKey);
+        _topologyInitializer.EnsureTopology(_channel);
 
         _logger.LogInformation(
             "Job status updates consumer connected. Queue: {QueueName}",
@@ -84,11 +65,11 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
 
             try
             {
-                // 先把 MQ 里的消息还原成应用层消息契约。
+                // 先把 MQ 里的状态变化消息还原成应用层契约。
                 var message = JsonSerializer.Deserialize<JobStatusChangedIntegrationMessage>(json, JsonSerializerOptions)
                     ?? throw new InvalidOperationException("Status change message deserialization failed.");
 
-                // 当前前端只需要一个轻量事件：哪个 Job 变了、变成什么状态。
+                // API 侧只做一件事：把状态变化转成前端能监听的 SignalR 事件。
                 await _hubContext.Clients.All.SendAsync(
                     "jobUpdated",
                     new
@@ -119,10 +100,9 @@ public sealed class JobStatusUpdatesConsumer : BackgroundService
 
     public override void Dispose()
     {
+        // 这里只释放当前 channel，长连接由 ConnectionProvider 统一管理。
         _channel?.Close();
-        _connection?.Close();
         _channel?.Dispose();
-        _connection?.Dispose();
         base.Dispose();
     }
 }
