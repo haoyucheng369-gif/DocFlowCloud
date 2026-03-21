@@ -1,3 +1,9 @@
+x-app-local-settings: &app-local-settings
+  RabbitMq__UserName: docflow
+  RabbitMq__Password: docflow-local-pass
+  Storage__Provider: Local
+  Storage__Local__RootPath: /shared-storage
+
 services:
   migrator:
     environment:
@@ -7,31 +13,22 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Testbed
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
-      RabbitMq__UserName: docflow
-      RabbitMq__Password: docflow-local-pass
+      <<: *app-local-settings
       RabbitMq__VirtualHost: /docflow-testbed
-      Storage__Provider: Local
-      Storage__Local__RootPath: /shared-storage
 
   worker:
     environment:
       DOTNET_ENVIRONMENT: Testbed
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
-      RabbitMq__UserName: docflow
-      RabbitMq__Password: docflow-local-pass
+      <<: *app-local-settings
       RabbitMq__VirtualHost: /docflow-testbed
-      Storage__Provider: Local
-      Storage__Local__RootPath: /shared-storage
 
   notification-service:
     environment:
       DOTNET_ENVIRONMENT: Testbed
       ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
-      RabbitMq__UserName: docflow
-      RabbitMq__Password: docflow-local-pass
+      <<: *app-local-settings
       RabbitMq__VirtualHost: /docflow-testbed
-      Storage__Provider: Local
-      Storage__Local__RootPath: /shared-storage
 
   web:
     build:

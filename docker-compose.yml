@@ -1,3 +1,19 @@
+x-rabbitmq-app-credentials: &rabbitmq-app-credentials
+  RABBITMQ_DEFAULT_USER: "docflow"
+  RABBITMQ_DEFAULT_PASS: "docflow-local-pass"
+
+x-rabbitmq-api-auth: &rabbitmq-api-auth
+  RABBITMQ_API_USER: "docflow"
+  RABBITMQ_API_PASS: "docflow-local-pass"
+
+x-app-depends-on: &app-depends-on
+  migrator:
+    condition: service_completed_successfully
+  sqlserver:
+    condition: service_healthy
+  rabbitmq-init:
+    condition: service_completed_successfully
+
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -22,8 +38,7 @@ services:
       - "5672:5672"
       - "15672:15672"
     environment:
-      RABBITMQ_DEFAULT_USER: "docflow"
-      RABBITMQ_DEFAULT_PASS: "docflow-local-pass"
+      <<: *rabbitmq-app-credentials
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -35,6 +50,8 @@ services:
   rabbitmq-init:
     image: curlimages/curl:8.12.1
     container_name: docflow-rabbitmq-init
+    environment:
+      <<: *rabbitmq-api-auth
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -43,13 +60,13 @@ services:
       - -c
       - |
         set -e
-        curl --fail --silent --show-error -u docflow:docflow-local-pass http://rabbitmq:15672/api/overview > /dev/null
-        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-dev
-        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-testbed
-        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT \
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" http://rabbitmq:15672/api/overview > /dev/null
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-dev
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-testbed
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT \
           -d "{\"configure\":\".*\",\"write\":\".*\",\"read\":\".*\"}" \
           http://rabbitmq:15672/api/permissions/%2Fdocflow-dev/docflow
-        curl --fail --silent --show-error -u docflow:docflow-local-pass -H "content-type: application/json" -X PUT \
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT \
           -d "{\"configure\":\".*\",\"write\":\".*\",\"read\":\".*\"}" \
           http://rabbitmq:15672/api/permissions/%2Fdocflow-testbed/docflow
 
@@ -76,12 +93,7 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
     depends_on:
-      migrator:
-        condition: service_completed_successfully
-      sqlserver:
-        condition: service_healthy
-      rabbitmq-init:
-        condition: service_completed_successfully
+      <<: *app-depends-on
     ports:
       - "8080:8080"
     volumes:
@@ -97,12 +109,7 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
     depends_on:
-      migrator:
-        condition: service_completed_successfully
-      sqlserver:
-        condition: service_healthy
-      rabbitmq-init:
-        condition: service_completed_successfully
+      <<: *app-depends-on
     volumes:
       - ./logs/worker:/app/logs
       - ./shared-storage:/shared-storage
@@ -116,12 +123,7 @@ services:
       RabbitMq__HostName: rabbitmq
       RabbitMq__Port: 5672
     depends_on:
-      migrator:
-        condition: service_completed_successfully
-      sqlserver:
-        condition: service_healthy
-      rabbitmq-init:
-        condition: service_completed_successfully
+      <<: *app-depends-on
     volumes:
       - ./logs/notification:/app/logs
       - ./shared-storage:/shared-storage
