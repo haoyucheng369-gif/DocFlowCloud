@@ -1,4 +1,18 @@
-version: '3.9'
+x-rabbitmq-app-credentials: &rabbitmq-app-credentials
+  RABBITMQ_DEFAULT_USER: "docflow"
+  RABBITMQ_DEFAULT_PASS: "docflow-local-pass"
+
+x-rabbitmq-api-auth: &rabbitmq-api-auth
+  RABBITMQ_API_USER: "docflow"
+  RABBITMQ_API_PASS: "docflow-local-pass"
+
+x-app-depends-on: &app-depends-on
+  migrator:
+    condition: service_completed_successfully
+  sqlserver:
+    condition: service_healthy
+  rabbitmq-init:
+    condition: service_completed_successfully
 
 services:
   sqlserver:
@@ -9,6 +23,13 @@ services:
       ACCEPT_EULA: "Y"
     ports:
       - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Your_password123!' -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -16,3 +37,108 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    environment:
+      <<: *rabbitmq-app-credentials
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq-init:
+    image: curlimages/curl:8.12.1
+    container_name: docflow-rabbitmq-init
+    environment:
+      <<: *rabbitmq-api-auth
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" http://rabbitmq:15672/api/overview > /dev/null
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-dev
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT http://rabbitmq:15672/api/vhosts/%2Fdocflow-testbed
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT \
+          -d "{\"configure\":\".*\",\"write\":\".*\",\"read\":\".*\"}" \
+          http://rabbitmq:15672/api/permissions/%2Fdocflow-dev/docflow
+        curl --fail --silent --show-error -u "$${RABBITMQ_API_USER}:$${RABBITMQ_API_PASS}" -H "content-type: application/json" -X PUT \
+          -d "{\"configure\":\".*\",\"write\":\".*\",\"read\":\".*\"}" \
+          http://rabbitmq:15672/api/permissions/%2Fdocflow-testbed/docflow
+
+  migrator:
+    build:
+      context: .
+      dockerfile: src/DocFlowCloud.Api/Dockerfile.migrator
+    container_name: docflow-migrator
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+
+  api:
+    build:
+      context: .
+      dockerfile: src/DocFlowCloud.Api/Dockerfile
+    container_name: docflow-api
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__Port: 5672
+    depends_on:
+      <<: *app-depends-on
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs/api:/app/logs
+      - ./shared-storage:/shared-storage
+
+  worker:
+    build:
+      context: .
+      dockerfile: src/DocFlowCloud.Worker/Dockerfile
+    container_name: docflow-worker
+    environment:
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__Port: 5672
+    depends_on:
+      <<: *app-depends-on
+    volumes:
+      - ./logs/worker:/app/logs
+      - ./shared-storage:/shared-storage
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: src/DocFlowCloud.NotificationService/Dockerfile
+    container_name: docflow-notification
+    environment:
+      RabbitMq__HostName: rabbitmq
+      RabbitMq__Port: 5672
+    depends_on:
+      <<: *app-depends-on
+    volumes:
+      - ./logs/notification:/app/logs
+      - ./shared-storage:/shared-storage
+
+  web:
+    build:
+      context: .
+      dockerfile: src/DocFlowCloud.Web/Dockerfile
+    container_name: docflow-web
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:80"
+
+volumes:
+  sqlserver-data:
+  rabbitmq_data:

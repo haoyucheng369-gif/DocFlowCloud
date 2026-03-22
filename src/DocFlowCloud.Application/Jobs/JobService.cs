@@ -1,91 +1,206 @@
-﻿using DocFlowCloud.Application.Abstractions.Messaging;
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
+using DocFlowCloud.Application.Abstractions.Storage;
+using DocFlowCloud.Application.Exceptions;
+using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Jobs;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using DocFlowCloud.Domain.Outbox;
+using System.Text.Json;
 
-namespace DocFlowCloud.Application.Jobs
+namespace DocFlowCloud.Application.Jobs;
+
+// 应用层服务：
+// 负责组织“创建任务、查询任务、下载结果、业务级重试”等用例流程。
+// 当前文档转 PDF 已改成“文件进入共享存储，数据库只存 storage key”。
+public sealed class JobService
 {
-    public class JobService
+    public const string DocumentToPdfJobType = "DocumentToPdf";
+
+    private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
+    private readonly ICorrelationContextAccessor _correlationContextAccessor;
+    private readonly IFileStorage _fileStorage;
+    private readonly IJobRepository _jobRepository;
+    private readonly IOutboxMessageRepository _outboxMessageRepository;
+
+    public JobService(
+        ICorrelationContextAccessor correlationContextAccessor,
+        IFileStorage fileStorage,
+        IJobRepository jobRepository,
+        IOutboxMessageRepository outboxMessageRepository)
     {
-        private readonly IJobRepository _jobRepository;
-        private readonly IJobMessagePublisher _jobMessagePublisher;
+        _correlationContextAccessor = correlationContextAccessor;
+        _fileStorage = fileStorage;
+        _jobRepository = jobRepository;
+        _outboxMessageRepository = outboxMessageRepository;
+    }
 
-        public JobService(IJobRepository jobRepository, IJobMessagePublisher jobMessagePublisher)
+    public async Task<Guid> CreateAsync(CreateJobRequest request, CancellationToken cancellationToken = default)
+    {
+        // 创建任务时，Job 和 Outbox 要一起写库，确保“业务记录”和“待发消息”一致。
+        var job = new Job(request.Name, request.Type, request.PayloadJson);
+
+        await _jobRepository.AddAsync(job, cancellationToken);
+        await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+
+        return job.Id;
+    }
+
+    public async Task<Guid> CreateDocumentToPdfAsync(
+        string? name,
+        string originalFileName,
+        string contentType,
+        byte[] fileBytes,
+        CancellationToken cancellationToken = default)
+    {
+        // 创建阶段先把原文件写进存储层，业务表里只保存逻辑 storage key。
+        var inputStorageKey = await _fileStorage.SaveAsync(
+            "uploads",
+            originalFileName,
+            fileBytes,
+            cancellationToken);
+
+        var payload = new DocumentToPdfJobPayload
         {
-            _jobMessagePublisher = jobMessagePublisher;
-            _jobRepository = jobRepository; 
+            OriginalFileName = originalFileName,
+            ContentType = contentType,
+            InputStorageKey = inputStorageKey
+        };
+
+        var request = new CreateJobRequest
+        {
+            Name = string.IsNullOrWhiteSpace(name) ? originalFileName : name,
+            Type = DocumentToPdfJobType,
+            PayloadJson = JsonSerializer.Serialize(payload, JsonSerializerOptions)
+        };
+
+        return await CreateAsync(request, cancellationToken);
+    }
+
+    public async Task<JobDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(id, cancellationToken);
+        return job is null ? null : Map(job);
+    }
+
+    public async Task<List<JobDto>> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        var jobs = await _jobRepository.GetAllAsync(cancellationToken);
+        return jobs.Select(Map).ToList();
+    }
+
+    public async Task<JobResultFileDto?> GetResultFileAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        // 下载结果时，按 output storage key 去存储层读 PDF。
+        var job = await _jobRepository.GetByIdAsync(id, cancellationToken);
+        if (job is null ||
+            job.Type != DocumentToPdfJobType ||
+            job.Status != JobStatus.Succeeded ||
+            string.IsNullOrWhiteSpace(job.ResultJson))
+        {
+            return null;
         }
 
-        public async Task<Guid> CreateAsync(CreateJobRequest request, CancellationToken cancellationToken = default)
+        var result = JsonSerializer.Deserialize<DocumentToPdfJobResult>(job.ResultJson, JsonSerializerOptions);
+        if (result is null || string.IsNullOrWhiteSpace(result.OutputStorageKey))
         {
-            var job = new Job(request.Name, request.Type, request.PayloadJson);
-
-            await _jobRepository.AddAsync(job, cancellationToken);
-            await _jobRepository.SaveChangesAsync(cancellationToken);
-
-            await _jobMessagePublisher.PublishJobCreatedAsync(job.Id, cancellationToken);
-
-            return job.Id;
+            return null;
         }
 
-        public async Task<JobDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        var content = await _fileStorage.ReadAsync(result.OutputStorageKey, cancellationToken);
+        if (content is null)
         {
-            var job = await _jobRepository.GetByIdAsync(id, cancellationToken);
-            if (job is null) return null;
-
-            return Map(job);
+            return null;
         }
 
-        public async Task<List<JobDto>> GetAllAsync(CancellationToken cancellationToken = default)
+        return new JobResultFileDto
         {
-            var jobs = await _jobRepository.GetAllAsync(cancellationToken);
-            return jobs.Select(Map).ToList();
-        }
+            FileName = result.OutputFileName,
+            ContentType = "application/pdf",
+            Content = content
+        };
+    }
 
-        public async Task MarkProcessingAsync(Guid jobId, CancellationToken cancellationToken = default)
+    public async Task MarkProcessingAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+            ?? throw new JobNotFoundException(jobId);
+
+        TryChangeState(jobId, job.MarkProcessing);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkSucceededAsync(Guid jobId, string resultJson, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+            ?? throw new JobNotFoundException(jobId);
+
+        TryChangeState(jobId, () => job.MarkSucceeded(resultJson));
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task MarkFailedAsync(Guid jobId, string errorMessage, CancellationToken cancellationToken = default)
+    {
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+            ?? throw new JobNotFoundException(jobId);
+
+        TryChangeState(jobId, () => job.MarkFailed(errorMessage));
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task RetryAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        // 业务级重试：先把状态从 Failed 拉回 Pending，再补一条新的 outbox 消息。
+        var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
+            ?? throw new JobNotFoundException(jobId);
+
+        TryChangeState(jobId, job.Retry);
+        await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
+        await _jobRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task AddOutboxMessageAsync(Job job, string correlationId, CancellationToken cancellationToken)
+    {
+        var integrationMessage = new JobCreatedIntegrationMessage
         {
-            var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
-                      ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
+            MessageId = Guid.NewGuid(),
+            JobId = job.Id,
+            CorrelationId = correlationId,
+            IdempotencyKey = $"job:{job.Id}",
+            CreatedAtUtc = DateTime.UtcNow
+        };
 
-            job.MarkProcessing();
-            await _jobRepository.SaveChangesAsync(cancellationToken);
-        }
+        var payload = JsonSerializer.Serialize(integrationMessage, JsonSerializerOptions);
+        var outboxMessage = new OutboxMessage(nameof(JobCreatedIntegrationMessage), payload);
 
-        public async Task MarkSucceededAsync(Guid jobId, string resultJson, CancellationToken cancellationToken = default)
+        await _outboxMessageRepository.AddAsync(outboxMessage, cancellationToken);
+    }
+
+    private static void TryChangeState(Guid jobId, Action action)
+    {
+        try
         {
-            var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
-                      ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
-
-            job.MarkSucceeded(resultJson);
-            await _jobRepository.SaveChangesAsync(cancellationToken);
+            action();
         }
-
-        public async Task MarkFailedAsync(Guid jobId, string errorMessage, CancellationToken cancellationToken = default)
+        catch (InvalidOperationException exception)
         {
-            var job = await _jobRepository.GetByIdAsync(jobId, cancellationToken)
-                      ?? throw new InvalidOperationException($"Job '{jobId}' not found.");
-
-            job.MarkFailed(errorMessage);
-            await _jobRepository.SaveChangesAsync(cancellationToken);
+            throw new InvalidJobStateException(jobId, exception.Message, exception);
         }
+    }
 
-        private static JobDto Map(Job job)
+    private static JobDto Map(Job job)
+    {
+        return new JobDto
         {
-            return new JobDto
-            {
-                Id = job.Id,
-                Name = job.Name,
-                Type = job.Type,
-                Status = job.Status.ToString(),
-                RetryCount = job.RetryCount,
-                CreatedAtUtc = job.CreatedAtUtc,
-                StartedAtUtc = job.StartedAtUtc,
-                CompletedAtUtc = job.CompletedAtUtc,
-                ErrorMessage = job.ErrorMessage
-            };
-        }
-
+            Id = job.Id,
+            Name = job.Name,
+            Type = job.Type,
+            Status = job.Status.ToString(),
+            RetryCount = job.RetryCount,
+            CreatedAtUtc = job.CreatedAtUtc,
+            StartedAtUtc = job.StartedAtUtc,
+            CompletedAtUtc = job.CompletedAtUtc,
+            ErrorMessage = job.ErrorMessage
+        };
     }
 }

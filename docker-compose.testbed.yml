@@ -1,0 +1,37 @@
+x-app-local-settings: &app-local-settings
+  RabbitMq__UserName: docflow
+  RabbitMq__Password: docflow-local-pass
+  Storage__Provider: Local
+  Storage__Local__RootPath: /shared-storage
+
+services:
+  migrator:
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+
+  api:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Testbed
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      <<: *app-local-settings
+      RabbitMq__VirtualHost: /docflow-testbed
+
+  worker:
+    environment:
+      DOTNET_ENVIRONMENT: Testbed
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      <<: *app-local-settings
+      RabbitMq__VirtualHost: /docflow-testbed
+
+  notification-service:
+    environment:
+      DOTNET_ENVIRONMENT: Testbed
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=DocFlowCloudTestbedDb;User Id=sa;Password=Your_password123!;TrustServerCertificate=True"
+      <<: *app-local-settings
+      RabbitMq__VirtualHost: /docflow-testbed
+
+  web:
+    build:
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+        VITE_APP_ENV: testbed

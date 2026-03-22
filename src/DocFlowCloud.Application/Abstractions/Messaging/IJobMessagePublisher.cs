@@ -1,11 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿namespace DocFlowCloud.Application.Abstractions.Messaging;
 
-namespace DocFlowCloud.Application.Abstractions.Messaging
+public interface IJobMessagePublisher
 {
-    public interface IJobMessagePublisher
-    {
-        Task PublishJobCreatedAsync(Guid jobId, CancellationToken cancellationToken = default);
-    }
+    Task PublishJobCreatedAsync(Guid jobId, CancellationToken cancellationToken = default);
+    Task PublishRawAsync(string messageType, string payloadJson, CancellationToken cancellationToken = default);
 }
