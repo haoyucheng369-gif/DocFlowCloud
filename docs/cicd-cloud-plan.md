@@ -21,9 +21,9 @@ to:
 - one system-level GitHub Actions workflow
 - one CI/CD pipeline
 - one branch for test validation:
-  - `testbed`
+  - `test`
 - one branch for production promotion:
-  - `main`
+  - `master`
 - two deployment stages:
   - automatic `testbed`
   - controlled `production`
@@ -54,7 +54,7 @@ It currently contains four jobs:
      - `notification-service`
      - `migrator`
    - push images to GHCR
-   - runs only for the `testbed` branch
+   - runs only for the `test` branch
 
 3. `deploy-testbed`
    - first deployment stage
@@ -150,7 +150,7 @@ Typical secrets:
 
 ## Branch Strategy
 
-### `testbed`
+### `test`
 
 Used for:
 
@@ -159,9 +159,9 @@ Used for:
 - GHCR push
 - automatic deployment to testbed
 
-The image tag used for testbed is the commit SHA of the `testbed` branch push.
+The image tag used for testbed is the commit SHA of the `test` branch push.
 
-### `main`
+### `master`
 
 Used for:
 
@@ -173,7 +173,7 @@ It should reuse the exact image tag that already passed through testbed.
 
 Current workflow design:
 
-- push to `main` still runs CI
+- push to `master` still runs CI
 - production deployment is manual through `workflow_dispatch`
 - the operator provides the already-validated `image_tag`
 
@@ -230,10 +230,10 @@ Still placeholder:
 
 ## Recommended Next Implementation Order
 
-1. Push to `testbed` and confirm CI + GHCR image push works
+1. Push to `test` and confirm CI + GHCR image push works
 2. Create Azure testbed resource group and Container Apps environment
 3. Replace the `deploy-testbed` placeholder with real Azure deployment commands
 4. Add Azure Blob support for non-local environments
 5. Add Key Vault-backed secrets
-6. Merge validated code to `main`
-7. Run `workflow_dispatch` on `main` with the already-validated image tag to promote to production
+6. Merge validated code to `master`
+7. Run `workflow_dispatch` on `master` with the already-validated image tag to promote to production

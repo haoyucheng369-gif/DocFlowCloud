@@ -3,8 +3,8 @@ name: DocFlowCloud CI/CD
 on:
   push:
     branches:
-      - testbed
-      - main
+      - test
+      - master
   pull_request:
   workflow_dispatch:
     inputs:
@@ -26,7 +26,7 @@ env:
   IMAGE_NAMESPACE: ${{ github.repository_owner }}
 
 jobs:
-  # CI 对所有 PR、testbed 分支、main 分支都执行。
+  # CI 对所有 PR、test 分支、master 分支都执行。
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
@@ -71,12 +71,12 @@ jobs:
         run: npm run build
         working-directory: src/DocFlowCloud.Web
 
-  # 只有 testbed 分支才真正构建并推送镜像。
+  # 只有 test 分支才真正构建并推送镜像。
   build-and-push-images:
     name: Build and push images
     runs-on: ubuntu-latest
     needs: build-and-test
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/testbed'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
 
     strategy:
       fail-fast: false
@@ -135,7 +135,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
 
-  # testbed 环境自动部署，使用 testbed 分支刚生成的镜像 tag。
+  # testbed 环境自动部署，使用 test 分支刚生成的镜像 tag。
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
@@ -143,7 +143,7 @@ jobs:
     environment: testbed
     if: >
       github.event_name != 'pull_request' &&
-      github.ref == 'refs/heads/testbed'
+      github.ref == 'refs/heads/test'
 
     steps:
       - name: Checkout repository
@@ -178,7 +178,7 @@ jobs:
     environment: production
     if: >
       github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/main' &&
+      github.ref == 'refs/heads/master' &&
       inputs.image_tag != ''
 
     steps:
