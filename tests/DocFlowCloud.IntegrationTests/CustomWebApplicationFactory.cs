@@ -1,4 +1,5 @@
 using DocFlowCloud.Infrastructure.Persistence;
+using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -36,6 +37,11 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
+            // 集成测试只关心 HTTP -> 应用服务 -> 持久化链路。
+            // API 里那个用于 SignalR 实时转发的 RabbitMQ 后台消费者在 CI 测试环境里没有必要启动，
+            // 否则它会在宿主启动时尝试连接 RabbitMQ，导致测试环境额外依赖消息中间件。
+            services.RemoveAll<IHostedService>();
+
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<DbContextOptions>();
             services.RemoveAll<AppDbContext>();
