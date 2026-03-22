@@ -1,11 +1,23 @@
 name: DocFlowCloud CI/CD
 
 on:
+  # test 分支承担 testbed 验证职责：
+  # 代码推上 test 后，自动执行 CI、构建镜像并进入 testbed 部署阶段。
+  #
+  # master 分支承担 production promotion 职责：
+  # master 仍然跑 CI，但 production 发布通过 workflow_dispatch 手动触发，
+  # 并显式传入已经在 testbed 验证过的 image tag。
   push:
     branches:
       - test
       - master
+
+  # PR 只做 CI，不做镜像推送和部署。
   pull_request:
+
+  # production promote 使用手动触发。
+  # 这里要求操作者输入一个已经存在于 GHCR 的 image_tag，
+  # 从而贯彻 “build once, deploy many” 原则。
   workflow_dispatch:
     inputs:
       image_tag:
@@ -26,7 +38,11 @@ env:
   IMAGE_NAMESPACE: ${{ github.repository_owner }}
 
 jobs:
-  # CI 对所有 PR、test 分支、master 分支都执行。
+  # ------------------------------------------------------------
+  # 1. 通用 CI
+  # ------------------------------------------------------------
+  # 对 PR / test / master 都执行。
+  # 这里只做代码层验证，不涉及镜像推送和环境部署。
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
@@ -71,7 +87,12 @@ jobs:
         run: npm run build
         working-directory: src/DocFlowCloud.Web
 
-  # 只有 test 分支才真正构建并推送镜像。
+  # ------------------------------------------------------------
+  # 2. 构建并推送镜像
+  # ------------------------------------------------------------
+  # 只有 test 分支会真正产出 deployable images。
+  # 这些镜像随后会先部署到 testbed，
+  # 后续 production 再复用同一个 tag，而不是重新构建。
   build-and-push-images:
     name: Build and push images
     runs-on: ubuntu-latest
@@ -135,7 +156,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
 
-  # testbed 环境自动部署，使用 test 分支刚生成的镜像 tag。
+  # ------------------------------------------------------------
+  # 3. 自动部署到 testbed
+  # ------------------------------------------------------------
+  # 这是第一落地环境。
+  # 当前仓库阶段，testbed 代表“先验证系统能否部署并运行”。
+  #
+  # 注意：
+  # 现在 Azure 资源和 secrets 还没真正配完，因此这里先做成
+  # “有 secrets 就继续部署；没有就明确提示并跳过”，避免整条 CI 因
+  # 还没接 Azure 而失败。
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
@@ -149,14 +179,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate Azure testbed secrets
+      - name: Detect Azure testbed deployment readiness
+        id: testbed-ready
         run: |
           if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -z "${{ secrets.AZURE_TENANT_ID }}" ] || [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Azure deployment secrets are missing for the testbed environment."
-            exit 1
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Azure login
+        if: steps.testbed-ready.outputs.ready == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -164,13 +198,23 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Placeholder testbed deploy step
+        if: steps.testbed-ready.outputs.ready == 'true'
         run: |
           echo "Deploy testbed with image tag: ${{ github.sha }}"
           echo "Target recommendation: Azure Container Apps"
           echo "Replace this step with az containerapp update/create commands"
 
-  # production 不重新 build，而是使用已经在 testbed 验证过的镜像 tag。
-  # 当前版本采用手动触发，传入 image_tag 后才会真正进入 prod 发布。
+      - name: Testbed deployment skipped
+        if: steps.testbed-ready.outputs.ready != 'true'
+        run: |
+          echo "Testbed deployment was skipped because Azure secrets are not configured yet."
+          echo "CI and GHCR image publication still succeeded."
+
+  # ------------------------------------------------------------
+  # 4. 手动 promote 到 production
+  # ------------------------------------------------------------
+  # production 不重新 build，而是复用已经在 testbed 验证过的 image tag。
+  # 当前阶段保留为手动触发，后续再补审批和真实 Azure 发布命令。
   deploy-production:
     name: Deploy to production
     runs-on: ubuntu-latest
@@ -185,14 +229,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate Azure production secrets
+      - name: Detect Azure production deployment readiness
+        id: production-ready
         run: |
           if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -z "${{ secrets.AZURE_TENANT_ID }}" ] || [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Azure deployment secrets are missing for the production environment."
-            exit 1
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Azure login
+        if: steps.production-ready.outputs.ready == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -200,7 +248,14 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Placeholder production deploy step
+        if: steps.production-ready.outputs.ready == 'true'
         run: |
           echo "Deploy production with already-built image tag: ${{ inputs.image_tag }}"
           echo "Production should reuse the image already validated in testbed."
           echo "Replace this step with az containerapp update/create commands"
+
+      - name: Production deployment skipped
+        if: steps.production-ready.outputs.ready != 'true'
+        run: |
+          echo "Production deployment was skipped because Azure secrets are not configured yet."
+          echo "When Azure is ready, rerun workflow_dispatch from master with a validated image tag."
