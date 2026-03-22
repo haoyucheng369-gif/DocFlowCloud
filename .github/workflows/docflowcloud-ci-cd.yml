@@ -143,14 +143,18 @@ jobs:
     environment: testbed
     if: >
       github.event_name != 'pull_request' &&
-      github.ref == 'refs/heads/testbed' &&
-      secrets.AZURE_CLIENT_ID != '' &&
-      secrets.AZURE_TENANT_ID != '' &&
-      secrets.AZURE_SUBSCRIPTION_ID != ''
+      github.ref == 'refs/heads/testbed'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate Azure testbed secrets
+        run: |
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -z "${{ secrets.AZURE_TENANT_ID }}" ] || [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "Azure deployment secrets are missing for the testbed environment."
+            exit 1
+          fi
 
       - name: Azure login
         uses: azure/login@v2
@@ -175,14 +179,18 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
-      inputs.image_tag != '' &&
-      secrets.AZURE_CLIENT_ID != '' &&
-      secrets.AZURE_TENANT_ID != '' &&
-      secrets.AZURE_SUBSCRIPTION_ID != ''
+      inputs.image_tag != ''
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Validate Azure production secrets
+        run: |
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -z "${{ secrets.AZURE_TENANT_ID }}" ] || [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "Azure deployment secrets are missing for the production environment."
+            exit 1
+          fi
 
       - name: Azure login
         uses: azure/login@v2
