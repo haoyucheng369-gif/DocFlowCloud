@@ -1,214 +1,280 @@
 # DocFlowCloud
 
-DocFlowCloud 现在是一个面向学习和演示的**异步文档转 PDF 系统**。
+DocFlowCloud is a portfolio-style asynchronous document-to-PDF system built to demonstrate a realistic enterprise application flow:
 
-它把一个比较完整的企业常见后端骨架落到了具体业务上：
-- ASP.NET Core Web API
-- Clean Architecture
-- RabbitMQ Topic 事件分发
-- Outbox / Inbox
-- TryClaim 去重与抢占处理权
-- Worker 后台异步处理
+- ASP.NET Core API
+- React + TypeScript frontend
+- RabbitMQ-based background processing
+- Outbox / Inbox reliability patterns
 - Retry / DLQ / Backoff
-- CorrelationId 链路日志
-- 本地共享存储 / Azure Blob 可切换文件存储
-- React + TypeScript + Tailwind 前端
-- TanStack Query + react-hook-form + zod
+- Stale-processing recovery
+- SignalR realtime updates
+- Local file storage with Azure Blob extension point
+- Multi-environment local setup for `Development` and `Testbed`
 
-## 当前业务能力
+## What It Does
 
-- 上传简单文档并创建异步转换任务
-- 支持输入类型：
-  - 图片：`jpg / jpeg / png / bmp / gif / webp`
-  - 文本：`txt`
-  - Markdown：`md`
-  - HTML：`html / htm`
-- 后台异步转成 PDF
-- 查看任务列表
-- 查看任务详情
-- 下载转换结果
-- 失败后重试
-- 处理中卡死自动恢复
+1. User uploads one or more files
+2. API creates async conversion jobs
+3. Worker converts files to PDF in the background
+4. Frontend tracks status and allows download / retry
 
-## 文档
+Supported inputs:
 
-- [架构说明](docs/architecture.md)
-- [系统流程图](docs/system-flow.md)
-- [状态图](docs/state-diagrams.md)
+- images: `jpg`, `jpeg`, `png`, `bmp`, `gif`, `webp`
+- text: `txt`
+- markdown: `md`
+- html: `html`, `htm`
 
-## 项目结构
+## Main Components
 
-- `src/DocFlowCloud.Api`
-  HTTP API，负责上传文件、创建任务、查询任务、下载结果
-- `src/DocFlowCloud.Application`
-  用例编排、DTO、消息契约、文件存储抽象
-- `src/DocFlowCloud.Domain`
-  `Job` / `Inbox` / `Outbox` 领域模型和状态机
-- `src/DocFlowCloud.Infrastructure`
-  EF Core、RabbitMQ、文件存储实现、依赖注入
-- `src/DocFlowCloud.Worker`
-  Outbox 发布、Job 消费、文档转 PDF、卡死恢复
-- `src/DocFlowCloud.NotificationService`
-  第二个消费者，模拟通知服务
 - `src/DocFlowCloud.Web`
-  React 前端，负责上传、列表、详情、下载、重试
+  - React frontend, upload / list / detail pages, SignalR client
+- `src/DocFlowCloud.Api`
+  - HTTP API, SignalR hub, realtime update consumer
+- `src/DocFlowCloud.Worker`
+  - main background processor, retry / DLQ / stale recovery
+- `src/DocFlowCloud.NotificationService`
+  - secondary consumer example
+- `src/DocFlowCloud.Application`
+  - use cases, contracts, storage abstraction
+- `src/DocFlowCloud.Domain`
+  - entities, state rules, outbox / inbox models
+- `src/DocFlowCloud.Infrastructure`
+  - EF Core, RabbitMQ, local storage, Azure Blob extension point
 
-## 本地开发启动
+## Architecture
 
-### 方式一：推荐开发方式
+```mermaid
+flowchart LR
+    U[User Browser]
+    W[DocFlowCloud.Web<br/>React + TypeScript]
+    A[DocFlowCloud.Api<br/>ASP.NET Core API + SignalR]
+    DB[(SQL Server)]
+    FS[(Local Storage / Azure Blob)]
+    O[OutboxPublisherWorker]
+    MQ[(RabbitMQ)]
+    WK[DocFlowCloud.Worker]
+    NS[DocFlowCloud.NotificationService]
 
-只用 Docker 跑基础设施，本机直接调试应用。
+    U --> W
+    W -->|HTTP| A
+    W -.->|SignalR subscribe| A
+    A --> DB
+    A --> FS
+    A -->|write outbox| DB
+    O -->|publish job.created| MQ
+    MQ --> WK
+    MQ --> NS
+    WK --> FS
+    WK --> DB
+    WK -->|publish job.status.changed| MQ
+    MQ --> A
+    A -.->|jobUpdated| W
+```
 
-1. 启动 SQL Server 和 RabbitMQ
+## Main Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Web as Web Frontend
+    participant Api as API
+    participant DB as SQL Server
+    participant Outbox as OutboxPublisherWorker
+    participant MQ as RabbitMQ
+    participant Worker as RabbitMqWorker
+    participant Storage as FileStorage
+    participant Realtime as JobStatusUpdatesConsumer
+
+    User->>Web: Upload file
+    Web->>Api: POST /document-to-pdf
+    Api->>Storage: Save input file
+    Api->>DB: Save Job + Outbox(job.created)
+    Outbox->>MQ: Publish job.created
+    MQ->>Worker: Deliver job.created
+    Worker->>DB: TryClaim inbox + load job
+    Worker->>Storage: Read input file
+    Worker->>Storage: Save generated PDF
+    Worker->>DB: Save Job result + Inbox processed
+    Worker->>MQ: Publish job.status.changed
+    MQ->>Realtime: Deliver job.status.changed
+    Realtime->>Web: SignalR jobUpdated
+    Web->>Api: Refresh jobs / job detail
+```
+
+## Failure and Recovery
+
+```mermaid
+flowchart TD
+    M[Main queue message<br/>job.created] --> C[Worker consumes message]
+    C --> P[TryClaim inbox<br/>load job<br/>execute conversion]
+
+    P -->|Success| S[Commit Job + Inbox<br/>publish job.status.changed]
+    P -->|Exception| E{Retryable error?}
+
+    E -->|Yes| RQ[Send to retry queue<br/>TTL + x-retry-count]
+    RQ --> DLX[Dead-letter back to main queue]
+    DLX --> M
+    E -->|No| DQ[Send to DLQ]
+
+    ST[StaleInboxRecoveryWorker] --> SI[Find stuck Processing inbox]
+    SI --> J{Job already succeeded?}
+    J -->|Yes| FIX[Mark old inbox Processed]
+    J -->|No| RF[Mark old inbox Failed<br/>move job back to retryable state]
+    RF --> NO[Create replay OutboxMessage]
+    NO --> OP[OutboxPublisherWorker republishes]
+    OP --> M
+```
+
+## Reliability Summary
+
+- `Outbox`
+  - API writes `Job` and `OutboxMessage(job.created)` in one transaction
+- `Inbox`
+  - consumer-side idempotency, claiming and stale detection
+- `TryClaim`
+  - only one worker instance can process the same message
+- `Retry / Backoff`
+  - retry queue + TTL + dead-letter back to main queue
+- `DLQ`
+  - non-retryable or exhausted messages end here
+- `Stale recovery`
+  - stuck `Processing` inbox entries are recovered and replayed
+
+## Realtime Updates
+
+SignalR is used for browser updates:
+
+1. Worker publishes `job.status.changed`
+2. API consumes it
+3. API pushes `jobUpdated`
+4. Frontend refreshes affected queries
+
+## File Storage
+
+The database stores logical file keys, not file contents.
+
+- current provider: `Local`
+- extension point: `AzureBlob`
+
+Important keys:
+
+- `InputStorageKey`
+- `OutputStorageKey`
+
+## Environments
+
+Supported environment names:
+
+- `Development`
+- `Testbed`
+- `Production`
+
+Current intended usage:
+
+- local IDE debugging: `Development`
+- local Docker Compose dev stack: `Development`
+- local Docker Compose testbed simulation: `Testbed`
+- cloud pre-production: `Testbed`
+- cloud production: `Production`
+
+## Docker Compose
+
+Files:
+
+- `docker-compose.yml`
+  - shared base services
+- `docker-compose.dev.yml`
+  - local `Development` overrides
+- `docker-compose.testbed.yml`
+  - local `Testbed` overrides
+
+One-off containers:
+
+- `migrator`
+  - applies database migrations
+- `rabbitmq-init`
+  - creates local RabbitMQ virtual hosts and permissions
+
+## Local Run
+
+### Option A: Day-to-day development
+
+Run infrastructure in Docker, run app code from IDE / terminal.
 
 ```powershell
 docker compose up -d sqlserver rabbitmq
-```
-
-2. 启动 API
-
-```powershell
 dotnet run --project src/DocFlowCloud.Api
-```
-
-3. 启动 Worker
-
-```powershell
 dotnet run --project src/DocFlowCloud.Worker
-```
-
-4. 启动 Notification Service
-
-```powershell
 dotnet run --project src/DocFlowCloud.NotificationService
-```
-
-5. 启动前端
-
-```powershell
 cd src/DocFlowCloud.Web
 npm install
 npm run dev
 ```
 
-前端默认地址：
-- `http://localhost:5173` 或 Vite 控制台显示的地址
-
-后端默认地址：
-- API：`http://localhost:5000` 或实际启动端口
-- RabbitMQ 管理台：`http://localhost:15672`
-
-### 方式二：一键 Docker 启动
+### Option B: Local Development stack
 
 ```powershell
-docker compose up --build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
 ```
 
-启动后默认访问：
-- 前端：`http://localhost:3000`
-- API：`http://localhost:8080`
-- RabbitMQ 管理台：`http://localhost:15672`
+Expected banner values:
 
-## 文件存储
+- Frontend: `development`
+- API: `Development`
+- RabbitMQ vhost: `/docflow-dev`
+- Database: `DocFlowCloudDevDb`
 
-当前默认使用：
-- `Storage:Provider = Local`
+### Option C: Local Testbed simulation
 
-本地和 Docker 下都会使用共享目录：
-- `shared-storage/uploads/...`
-- `shared-storage/results/...`
-
-数据库里不再保存文件 Base64，而是只保存：
-- `InputStorageKey`
-- `OutputStorageKey`
-
-后续上云时可以切换：
-- `Storage:Provider = AzureBlob`
-
-## 示例请求
-
-### 上传并创建文档转 PDF 任务
-
-```http
-POST /api/jobs/document-to-pdf
-Content-Type: multipart/form-data
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.testbed.yml up --build -d
 ```
 
-表单字段：
-- `file`：上传文件
-- `name`：可选任务名
+Expected banner values:
 
-### 查询任务列表
+- Frontend: `testbed`
+- API: `Testbed`
+- RabbitMQ vhost: `/docflow-testbed`
+- Database: `DocFlowCloudTestbedDb`
 
-```http
-GET /api/jobs
-```
+## Important Entry Points
 
-### 查询任务详情
+Backend:
 
-```http
-GET /api/jobs/{id}
-```
+- `src/DocFlowCloud.Application/Jobs/JobService.cs`
+- `src/DocFlowCloud.Worker/RabbitMqWorker.cs`
+- `src/DocFlowCloud.Worker/OutboxPublisherWorker.cs`
+- `src/DocFlowCloud.Worker/StaleInboxRecoveryWorker.cs`
+- `src/DocFlowCloud.Worker/JobSideEffectExecutor.cs`
+- `src/DocFlowCloud.Api/Realtime/JobStatusUpdatesConsumer.cs`
+- `src/DocFlowCloud.Domain/Jobs/Job.cs`
+- `src/DocFlowCloud.Domain/Inbox/InboxMessage.cs`
 
-### 下载 PDF
+Frontend:
 
-```http
-GET /api/jobs/{id}/result-file
-```
+- `src/DocFlowCloud.Web/src/pages/CreateJobPage.tsx`
+- `src/DocFlowCloud.Web/src/pages/JobsPage.tsx`
+- `src/DocFlowCloud.Web/src/pages/JobDetailPage.tsx`
+- `src/DocFlowCloud.Web/src/lib/api.ts`
+- `src/DocFlowCloud.Web/src/lib/signalr.ts`
+- `src/DocFlowCloud.Web/src/components/Layout.tsx`
 
-### 重试失败任务
+Environment / deployment:
 
-```http
-POST /api/jobs/{id}/retry
-```
+- `src/DocFlowCloud.Api/appsettings.*.json`
+- `src/DocFlowCloud.Worker/appsettings.*.json`
+- `src/DocFlowCloud.NotificationService/appsettings.*.json`
+- `docker-compose.yml`
+- `docker-compose.dev.yml`
+- `docker-compose.testbed.yml`
 
-## 前端演示页面
+## Next Steps
 
-当前前端包含 3 个核心页面：
-
-1. 新建任务页
-   - 选择文件
-   - 填任务名
-   - 提交转换任务
-
-2. 任务列表页
-   - 查看任务名称
-   - 查看状态
-   - 查看创建时间
-   - 判断是否可重试
-
-3. 任务详情页
-   - 查看当前状态
-   - 自动轮询任务结果
-   - 下载转换后的 PDF
-   - 对失败任务执行重试
-
-## 演示建议
-
-推荐你按下面顺序演示：
-
-1. 在前端上传一个 `txt / md / html / image` 文件
-2. 提交后跳转到任务详情页
-3. 展示任务状态从 `Pending -> Processing -> Succeeded`
-4. 下载转换后的 PDF
-5. 查看任务列表中的状态变化
-6. 如果需要，演示失败任务重试
-
-## 适合展示的技术点
-
-- 为什么文档转换适合异步处理
-- 为什么需要 Outbox / Inbox
-- 为什么需要 TryClaim
-- 为什么要做业务幂等
-- 为什么要做 Retry / DLQ / Backoff
-- 为什么要做 CorrelationId
-- 为什么文件存储要抽象成 `StorageKey + Provider`
-
-## 当前定位
-
-这个项目更适合理解成：
-
-- 一个高质量的异步文档处理学习项目
-- 一个带消息可靠性和恢复能力的企业应用样板
-
-它不是一个完整微服务平台，但已经覆盖了很多企业项目里非常重要的核心能力。
+- CI/CD pipeline
+- Azure Blob real integration
+- cloud `Testbed` deployment
+- Key Vault / secrets separation
+- Terraform for infrastructure
+- observability improvements
