@@ -1,0 +1,198 @@
+name: DocFlowCloud CI/CD
+
+on:
+  push:
+    branches:
+      - testbed
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing GHCR image tag to deploy to production"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  DOTNET_VERSION: 10.0.x
+  NODE_VERSION: 20
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+
+jobs:
+  # CI 对所有 PR、testbed 分支、main 分支都执行。
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/DocFlowCloud.Web/package-lock.json
+
+      - name: Restore .NET dependencies
+        run: dotnet restore DocFlowCloud.sln
+
+      - name: Build .NET solution
+        run: dotnet build DocFlowCloud.sln --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test tests/DocFlowCloud.UnitTests/DocFlowCloud.UnitTests.csproj --configuration Release --no-build
+
+      - name: Run integration tests
+        run: dotnet test tests/DocFlowCloud.IntegrationTests/DocFlowCloud.IntegrationTests.csproj --configuration Release --no-build
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: src/DocFlowCloud.Web
+
+      - name: Run frontend tests
+        run: npm test
+        working-directory: src/DocFlowCloud.Web
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/DocFlowCloud.Web
+
+  # 只有 testbed 分支才真正构建并推送镜像。
+  build-and-push-images:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/testbed'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image_name: docflowcloud-web
+            dockerfile: src/DocFlowCloud.Web/Dockerfile
+            context: .
+            build_args: |
+              VITE_API_BASE_URL=${{ vars.TESTBED_API_BASE_URL != '' && vars.TESTBED_API_BASE_URL || 'https://api-testbed.example.com' }}
+              VITE_APP_ENV=testbed
+          - image_name: docflowcloud-api
+            dockerfile: src/DocFlowCloud.Api/Dockerfile
+            context: .
+            build_args: ""
+          - image_name: docflowcloud-worker
+            dockerfile: src/DocFlowCloud.Worker/Dockerfile
+            context: .
+            build_args: ""
+          - image_name: docflowcloud-notification-service
+            dockerfile: src/DocFlowCloud.NotificationService/Dockerfile
+            context: .
+            build_args: ""
+          - image_name: docflowcloud-migrator
+            dockerfile: src/DocFlowCloud.Api/Dockerfile.migrator
+            context: .
+            build_args: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image_name }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=testbed-latest
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+
+  # testbed 环境自动部署，使用 testbed 分支刚生成的镜像 tag。
+  deploy-testbed:
+    name: Deploy to testbed
+    runs-on: ubuntu-latest
+    needs: build-and-push-images
+    environment: testbed
+    if: >
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/testbed' &&
+      secrets.AZURE_CLIENT_ID != '' &&
+      secrets.AZURE_TENANT_ID != '' &&
+      secrets.AZURE_SUBSCRIPTION_ID != ''
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Placeholder testbed deploy step
+        run: |
+          echo "Deploy testbed with image tag: ${{ github.sha }}"
+          echo "Target recommendation: Azure Container Apps"
+          echo "Replace this step with az containerapp update/create commands"
+
+  # production 不重新 build，而是使用已经在 testbed 验证过的镜像 tag。
+  # 当前版本采用手动触发，传入 image_tag 后才会真正进入 prod 发布。
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    environment: production
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.image_tag != '' &&
+      secrets.AZURE_CLIENT_ID != '' &&
+      secrets.AZURE_TENANT_ID != '' &&
+      secrets.AZURE_SUBSCRIPTION_ID != ''
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Placeholder production deploy step
+        run: |
+          echo "Deploy production with already-built image tag: ${{ inputs.image_tag }}"
+          echo "Production should reuse the image already validated in testbed."
+          echo "Replace this step with az containerapp update/create commands"
