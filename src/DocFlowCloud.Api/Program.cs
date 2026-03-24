@@ -71,7 +71,13 @@ builder.Services.AddScoped<JobService>();
 
 // 这个后台消费者负责订阅 RabbitMQ 上的 job.status.changed 事件，
 // 再把状态变化转成 SignalR 推送给前端。
-builder.Services.AddHostedService<JobStatusUpdatesConsumer>();
+var enableJobStatusConsumer =
+    builder.Configuration.GetValue("Realtime:EnableJobStatusConsumer", true);
+
+if (enableJobStatusConsumer)
+{
+    builder.Services.AddHostedService<JobStatusUpdatesConsumer>();
+}
 
 var app = builder.Build();
 

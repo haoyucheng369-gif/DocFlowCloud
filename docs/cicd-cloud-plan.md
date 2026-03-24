@@ -58,12 +58,13 @@ It currently contains four jobs:
 
 3. `deploy-testbed`
    - first deployment stage
-   - runs automatically after a successful `testbed` image build
-   - currently left as a placeholder for Azure Container Apps deployment
+   - runs automatically after a successful `test` image build
+   - deploys `api` and `web` to Azure Container Apps
+   - prints the generated API FQDN so `TESTBED_API_BASE_URL` can be updated later
 
 4. `deploy-production`
    - second deployment stage
-   - runs only from `main`
+   - runs only from `master`
    - requires a manually provided `image_tag`
    - is intended to stay behind GitHub environment approval
 
@@ -98,6 +99,29 @@ Planned deployed services:
 - `notification-service`
 
 The `migrator` image can later be used as a one-off migration job.
+
+### First cloud deployment scope
+
+The first real cloud deployment should stay intentionally narrow:
+
+- deploy `api`
+- deploy `web`
+- do not deploy `worker` yet
+- do not deploy `notification-service` yet
+
+This keeps the first Azure deployment focused on validating:
+
+- GitHub Actions -> Azure login
+- GHCR -> Azure Container Apps image pull
+- basic `testbed` promotion flow
+
+To reduce external dependencies in the first pass:
+
+- API disables the realtime RabbitMQ consumer in cloud testbed
+- API temporarily forces `Storage__Provider=Local`
+
+This first pass proves deployment mechanics.
+Azure SQL, Azure Blob and background services can be added right after.
 
 ## Environment Responsibilities
 
@@ -223,7 +247,6 @@ Already real:
 
 Still placeholder:
 
-- actual Azure Container Apps deployment commands for testbed
 - actual production promotion commands using the provided image tag
 - actual Azure Key Vault integration
 - actual Azure Blob runtime switch for testbed / production
@@ -232,8 +255,9 @@ Still placeholder:
 
 1. Push to `test` and confirm CI + GHCR image push works
 2. Create Azure testbed resource group and Container Apps environment
-3. Replace the `deploy-testbed` placeholder with real Azure deployment commands
-4. Add Azure Blob support for non-local environments
-5. Add Key Vault-backed secrets
-6. Merge validated code to `master`
-7. Run `workflow_dispatch` on `master` with the already-validated image tag to promote to production
+3. Push to `test` and let the first Azure deployment create/update `api` and `web`
+4. Update `TESTBED_API_BASE_URL` with the real Azure API FQDN and push `test` again
+5. Add Azure SQL and Azure Blob support for non-local environments
+6. Add Key Vault-backed secrets
+7. Merge validated code to `master`
+8. Run `workflow_dispatch` on `master` with the already-validated image tag to promote to production

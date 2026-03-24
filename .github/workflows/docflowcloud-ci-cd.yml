@@ -1,23 +1,23 @@
 name: DocFlowCloud CI/CD
 
 on:
-  # test 分支承担 testbed 验证职责：
-  # 代码推上 test 后，自动执行 CI、构建镜像并进入 testbed 部署阶段。
+  # test branch:
+  # - run CI
+  # - build and push images
+  # - deploy to testbed
   #
-  # master 分支承担 production promotion 职责：
-  # master 仍然跑 CI，但 production 发布通过 workflow_dispatch 手动触发，
-  # 并显式传入已经在 testbed 验证过的 image tag。
+  # master branch:
+  # - run CI
+  # - production is promoted manually with an already-validated image tag
   push:
     branches:
       - test
       - master
 
-  # PR 只做 CI，不做镜像推送和部署。
+  # Pull requests only run CI checks.
   pull_request:
 
-  # production promote 使用手动触发。
-  # 这里要求操作者输入一个已经存在于 GHCR 的 image_tag，
-  # 从而贯彻 “build once, deploy many” 原则。
+  # Production promotion is manual.
   workflow_dispatch:
     inputs:
       image_tag:
@@ -39,10 +39,10 @@ env:
 
 jobs:
   # ------------------------------------------------------------
-  # 1. 通用 CI
+  # 1. Common CI
   # ------------------------------------------------------------
-  # 对 PR / test / master 都执行。
-  # 这里只做代码层验证，不涉及镜像推送和环境部署。
+  # Runs for PRs, test and master.
+  # Validates code, tests and frontend build only.
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
@@ -88,11 +88,10 @@ jobs:
         working-directory: src/DocFlowCloud.Web
 
   # ------------------------------------------------------------
-  # 2. 构建并推送镜像
+  # 2. Build and push images
   # ------------------------------------------------------------
-  # 只有 test 分支会真正产出 deployable images。
-  # 这些镜像随后会先部署到 testbed，
-  # 后续 production 再复用同一个 tag，而不是重新构建。
+  # Only test branch creates deployable images.
+  # These images are first validated in testbed.
   build-and-push-images:
     name: Build and push images
     runs-on: ubuntu-latest
@@ -107,7 +106,7 @@ jobs:
             dockerfile: src/DocFlowCloud.Web/Dockerfile
             context: .
             build_args: |
-              VITE_API_BASE_URL=${{ vars.TESTBED_API_BASE_URL != '' && vars.TESTBED_API_BASE_URL || 'https://api-testbed.example.com' }}
+              VITE_API_BASE_URL=${{ vars.TESTBED_API_BASE_URL }}
               VITE_APP_ENV=testbed
           - image_name: docflowcloud-api
             dockerfile: src/DocFlowCloud.Api/Dockerfile
@@ -157,23 +156,22 @@ jobs:
           build-args: ${{ matrix.build_args }}
 
   # ------------------------------------------------------------
-  # 3. 自动部署到 testbed
+  # 3. Deploy to testbed
   # ------------------------------------------------------------
-  # 这是第一落地环境。
-  # 当前仓库阶段，testbed 代表“先验证系统能否部署并运行”。
+  # First cloud pass deploys only:
+  # - api
+  # - web
   #
-  # 注意：
-  # 现在 Azure 资源和 secrets 还没真正配完，因此这里先做成
-  # “有 secrets 就继续部署；没有就明确提示并跳过”，避免整条 CI 因
-  # 还没接 Azure 而失败。
+  # It intentionally does not deploy worker or notification-service yet.
+  # The API also disables the realtime RabbitMQ consumer and forces Local storage
+  # so the first Azure deployment proves the delivery chain without requiring
+  # all backend infrastructure to exist already.
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
     needs: build-and-push-images
     environment: testbed
-    if: >
-      github.event_name != 'pull_request' &&
-      github.ref == 'refs/heads/test'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
 
     steps:
       - name: Checkout repository
@@ -197,12 +195,86 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Placeholder testbed deploy step
+      - name: Ensure Azure Container Apps extension is available
+        if: steps.testbed-ready.outputs.ready == 'true'
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Deploy API to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.sha }}
+        run: |
+          if az containerapp show --name "$API_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$API_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$API_IMAGE" \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Realtime__EnableJobStatusConsumer=false \
+                Storage__Provider=Local
+          else
+            az containerapp create \
+              --name "$API_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$API_IMAGE" \
+              --ingress external \
+              --target-port 8080 \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Realtime__EnableJobStatusConsumer=false \
+                Storage__Provider=Local
+          fi
+
+      - name: Capture testbed API URL
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
+        run: |
+          API_FQDN=$(az containerapp show --name "$API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Testbed API URL: https://$API_FQDN"
+          echo "Update TESTBED_API_BASE_URL in GitHub testbed environment to this value, then push test again so the web image is rebuilt against the real API URL."
+
+      - name: Deploy Web to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          WEB_APP_NAME: ${{ vars.TESTBED_WEB_APP_NAME }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.sha }}
+        run: |
+          if az containerapp show --name "$WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$WEB_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$WEB_IMAGE"
+          else
+            az containerapp create \
+              --name "$WEB_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$WEB_IMAGE" \
+              --ingress external \
+              --target-port 80
+          fi
+
+      - name: Summarize first testbed deployment scope
         if: steps.testbed-ready.outputs.ready == 'true'
         run: |
-          echo "Deploy testbed with image tag: ${{ github.sha }}"
-          echo "Target recommendation: Azure Container Apps"
-          echo "Replace this step with az containerapp update/create commands"
+          echo "Current first-pass cloud deployment scope:"
+          echo "- web: deployed"
+          echo "- api: deployed"
+          echo "- worker: not deployed yet"
+          echo "- notification-service: not deployed yet"
+          echo "- API realtime consumer disabled in cloud testbed"
+          echo "- API storage temporarily forced to Local"
 
       - name: Testbed deployment skipped
         if: steps.testbed-ready.outputs.ready != 'true'
@@ -211,19 +283,16 @@ jobs:
           echo "CI and GHCR image publication still succeeded."
 
   # ------------------------------------------------------------
-  # 4. 手动 promote 到 production
+  # 4. Promote to production
   # ------------------------------------------------------------
-  # production 不重新 build，而是复用已经在 testbed 验证过的 image tag。
-  # 当前阶段保留为手动触发，后续再补审批和真实 Azure 发布命令。
+  # Production must reuse an image tag already validated in testbed.
+  # It does not rebuild images.
   deploy-production:
     name: Deploy to production
     runs-on: ubuntu-latest
     needs: build-and-test
     environment: production
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      github.ref == 'refs/heads/master' &&
-      inputs.image_tag != ''
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.image_tag != ''
 
     steps:
       - name: Checkout repository
