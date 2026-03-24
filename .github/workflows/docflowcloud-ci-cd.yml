@@ -92,8 +92,8 @@ jobs:
   # ------------------------------------------------------------
   # Only test branch creates deployable images.
   # These images are first validated in testbed.
-  build-and-push-images:
-    name: Build and push images
+  build-and-push-backend-images:
+    name: Build and push backend images
     runs-on: ubuntu-latest
     needs: build-and-test
     environment: testbed
@@ -103,12 +103,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image_name: docflowcloud-web
-            dockerfile: src/DocFlowCloud.Web/Dockerfile
-            context: .
-            build_args: |
-              VITE_API_BASE_URL=${{ vars.TESTBED_API_BASE_URL }}
-              VITE_APP_ENV=testbed
           - image_name: docflowcloud-api
             dockerfile: src/DocFlowCloud.Api/Dockerfile
             context: .
@@ -156,6 +150,44 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
 
+  build-and-push-web-image:
+    name: Build and push web image
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    environment: testbed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=testbed-latest
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/DocFlowCloud.Web/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_APP_ENV=testbed
+
   # ------------------------------------------------------------
   # 3. Deploy to testbed
   # ------------------------------------------------------------
@@ -170,7 +202,9 @@ jobs:
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
-    needs: build-and-push-images
+    needs:
+      - build-and-push-backend-images
+      - build-and-push-web-image
     environment: testbed
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
 
@@ -250,12 +284,16 @@ jobs:
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           WEB_APP_NAME: ${{ vars.TESTBED_WEB_APP_NAME }}
           WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.sha }}
+          API_BASE_URL: ${{ vars.TESTBED_API_BASE_URL }}
         run: |
           if az containerapp show --name "$WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp update \
               --name "$WEB_APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
-              --image "$WEB_IMAGE"
+              --image "$WEB_IMAGE" \
+              --set-env-vars \
+                RUNTIME_API_BASE_URL="$API_BASE_URL" \
+                RUNTIME_APP_ENV=testbed
           else
             az containerapp create \
               --name "$WEB_APP_NAME" \
@@ -263,7 +301,10 @@ jobs:
               --environment "$CONTAINER_APPS_ENV" \
               --image "$WEB_IMAGE" \
               --ingress external \
-              --target-port 80
+              --target-port 80 \
+              --env-vars \
+                RUNTIME_API_BASE_URL="$API_BASE_URL" \
+                RUNTIME_APP_ENV=testbed
           fi
 
       - name: Summarize first testbed deployment scope

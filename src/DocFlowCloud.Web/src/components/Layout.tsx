@@ -2,8 +2,8 @@ import { Link, NavLink } from "react-router-dom";
 import type { PropsWithChildren } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getSystemEnvironment, API_BASE_URL } from "../lib/api";
+import { getRuntimeAppEnvironment } from "../lib/runtimeConfig";
 
-// 页面总布局：统一头部导航和主内容容器，保持界面整洁一致。
 const navClassName = ({ isActive }: { isActive: boolean }) =>
   [
     "rounded-full px-4 py-2 text-sm font-medium transition-colors",
@@ -52,7 +52,6 @@ function EnvironmentChip({
 }
 
 export function Layout({ children }: PropsWithChildren) {
-  // 在公共布局里固定显示环境来源信息，方便一眼确认当前前端页面到底连的是哪套后端和基础设施。
   const {
     data: environment,
     isLoading: isEnvironmentLoading,
@@ -63,8 +62,7 @@ export function Layout({ children }: PropsWithChildren) {
     staleTime: 60_000
   });
 
-  const frontendEnvironment =
-    import.meta.env.VITE_APP_ENV?.toString()?.trim() || "development";
+  const frontendEnvironment = getRuntimeAppEnvironment();
   const environmentFallback = isEnvironmentLoading ? "Loading..." : "Unavailable";
 
   return (
@@ -85,11 +83,7 @@ export function Layout({ children }: PropsWithChildren) {
         </div>
         <div className="border-t border-line bg-soft/60">
           <div className="mx-auto flex max-w-6xl flex-wrap gap-x-4 gap-y-2 px-6 py-3 text-xs text-slate-600">
-            <EnvironmentChip
-              label="Frontend"
-              value={frontendEnvironment}
-              emphasize
-            />
+            <EnvironmentChip label="Frontend" value={frontendEnvironment} emphasize />
             <EnvironmentChip
               label="API"
               value={environment?.apiEnvironment ?? environmentFallback}
