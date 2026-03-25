@@ -189,15 +189,121 @@ jobs:
             VITE_APP_ENV=testbed
 
   # ------------------------------------------------------------
-  # 3. Deploy to testbed
+  # 3. Run database migrations in testbed
+  # ------------------------------------------------------------
+  # The database must be migrated before the API starts against Azure SQL.
+  # This job uses the already-built migrator image and executes it as a
+  # one-off Azure Container Apps Job.
+  run-testbed-migrator:
+    name: Run testbed migrator
+    runs-on: ubuntu-latest
+    needs: build-and-push-backend-images
+    environment: testbed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Azure Container Apps extension is available
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Create or update testbed migrator job
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          MIGRATOR_JOB_NAME: docflow-migrator-testbed
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.sha }}
+          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
+        run: |
+          if az containerapp job show --name "$MIGRATOR_JOB_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp job secret set \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --secrets sql-connection-string="$SQL_CONNECTION_STRING"
+
+            az containerapp job update \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$MIGRATOR_IMAGE" \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                ConnectionStrings__DefaultConnection=secretref:sql-connection-string
+          else
+            az containerapp job create \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --trigger-type Manual \
+              --replica-timeout 1800 \
+              --replica-retry-limit 1 \
+              --replica-completion-count 1 \
+              --parallelism 1 \
+              --cpu 0.25 \
+              --memory 0.5Gi \
+              --image "$MIGRATOR_IMAGE" \
+              --secrets sql-connection-string="$SQL_CONNECTION_STRING" \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                ConnectionStrings__DefaultConnection=secretref:sql-connection-string
+          fi
+
+      - name: Start testbed migrator job and wait for completion
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          MIGRATOR_JOB_NAME: docflow-migrator-testbed
+        run: |
+          EXECUTION_NAME=$(az containerapp job start \
+            --name "$MIGRATOR_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query name -o tsv)
+
+          echo "Started migrator execution: $EXECUTION_NAME"
+
+          for i in $(seq 1 60); do
+            STATUS=$(az containerapp job execution show \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$EXECUTION_NAME" \
+              --query properties.status -o tsv)
+
+            echo "Migrator execution status: $STATUS"
+
+            if [ "$STATUS" = "Succeeded" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Canceled" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "Migrator execution did not complete successfully."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for migrator execution to complete."
+          exit 1
+
+  # ------------------------------------------------------------
+  # 4. Deploy to testbed
   # ------------------------------------------------------------
   # First cloud pass deploys only:
   # - api
   # - web
   #
   # It intentionally does not deploy worker or notification-service yet.
-  # The API also disables the realtime RabbitMQ consumer and forces Local storage
-  # so the first Azure deployment proves the delivery chain without requiring
+  # The API also disables the realtime RabbitMQ consumer while already using
+  # Azure SQL and Azure Blob so the first Azure deployment proves the delivery
+  # chain without requiring
   # all backend infrastructure to exist already.
   deploy-testbed:
     name: Deploy to testbed
@@ -205,6 +311,7 @@ jobs:
     needs:
       - build-and-push-backend-images
       - build-and-push-web-image
+      - run-testbed-migrator
     environment: testbed
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
 
@@ -325,7 +432,8 @@ jobs:
           echo "- worker: not deployed yet"
           echo "- notification-service: not deployed yet"
           echo "- API realtime consumer disabled in cloud testbed"
-          echo "- API storage temporarily forced to Local"
+          echo "- API database: Azure SQL"
+          echo "- API storage: Azure Blob"
 
       - name: Testbed deployment skipped
         if: steps.testbed-ready.outputs.ready != 'true'

@@ -36,7 +36,7 @@ The workflow file is:
 
 - `.github/workflows/docflowcloud-ci-cd.yml`
 
-It currently contains four jobs:
+It currently contains five jobs:
 
 1. `build-and-test`
    - restore and build the .NET solution
@@ -46,23 +46,34 @@ It currently contains four jobs:
    - run frontend tests
    - build the frontend
 
-2. `build-and-push-images`
+2. `build-and-push-backend-images`
    - build Docker images for:
-     - `web`
      - `api`
      - `worker`
      - `notification-service`
      - `migrator`
-   - push images to GHCR
+   - push backend images to GHCR
    - runs only for the `test` branch
 
-3. `deploy-testbed`
+3. `build-and-push-web-image`
+   - build the `web` image
+   - push the web image to GHCR
+   - runs only for the `test` branch
+
+4. `run-testbed-migrator`
+   - runs the existing `migrator` image as a one-off Azure Container Apps Job
+   - applies EF Core migrations to the Azure SQL testbed database
+   - must succeed before `api` and `web` are deployed
+
+5. `deploy-testbed`
    - first deployment stage
    - runs automatically after a successful `test` image build
    - deploys `api` and `web` to Azure Container Apps
-   - prints the generated API FQDN so `TESTBED_API_BASE_URL` can be updated later
+   - injects the real Azure SQL connection string into the API
+   - injects the real Azure Blob connection string and container name into the API
+   - injects runtime configuration into the web container
 
-4. `deploy-production`
+6. `deploy-production`
    - second deployment stage
    - runs only from `master`
    - requires a manually provided `image_tag`
@@ -98,7 +109,7 @@ Planned deployed services:
 - `worker`
 - `notification-service`
 
-The `migrator` image can later be used as a one-off migration job.
+The `migrator` image is now used as a one-off migration job in testbed before the API is deployed.
 
 ### First cloud deployment scope
 
@@ -118,10 +129,10 @@ This keeps the first Azure deployment focused on validating:
 To reduce external dependencies in the first pass:
 
 - API disables the realtime RabbitMQ consumer in cloud testbed
-- API now reads Azure Blob settings from testbed environment configuration
+- API now reads Azure SQL and Azure Blob settings from testbed environment configuration
 
 This first pass proves deployment mechanics.
-Azure SQL, Azure Blob and background services can be added right after.
+Background services can be added right after.
 
 ## Environment Responsibilities
 
@@ -134,7 +145,7 @@ Azure SQL, Azure Blob and background services can be added right after.
 ### Testbed
 
 - first cloud deployment target
-- separate SQL database
+- separate Azure SQL database
 - separate messaging namespace / vhost
 - separate secrets
 - Azure Blob storage
@@ -249,7 +260,8 @@ Still placeholder:
 
 - actual production promotion commands using the provided image tag
 - actual Azure Key Vault integration
-- actual Azure Blob runtime switch for testbed / production
+- worker and notification-service deployment to Azure Container Apps
+- messaging infrastructure for full async cloud processing
 
 ## Recommended Next Implementation Order
 
@@ -257,7 +269,7 @@ Still placeholder:
 2. Create Azure testbed resource group and Container Apps environment
 3. Push to `test` and let the first Azure deployment create/update `api` and `web`
 4. Update `TESTBED_API_BASE_URL` with the real Azure API FQDN and push `test` again
-5. Add Azure SQL and Azure Blob support for non-local environments
+5. Add `worker` and `notification-service` to testbed
 6. Add Key Vault-backed secrets
 7. Merge validated code to `master`
 8. Run `workflow_dispatch` on `master` with the already-validated image tag to promote to production
