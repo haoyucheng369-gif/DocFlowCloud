@@ -118,7 +118,7 @@ This keeps the first Azure deployment focused on validating:
 To reduce external dependencies in the first pass:
 
 - API disables the realtime RabbitMQ consumer in cloud testbed
-- API temporarily forces `Storage__Provider=Local`
+- API now reads Azure Blob settings from testbed environment configuration
 
 This first pass proves deployment mechanics.
 Azure SQL, Azure Blob and background services can be added right after.
