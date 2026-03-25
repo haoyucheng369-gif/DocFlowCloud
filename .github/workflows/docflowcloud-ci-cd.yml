@@ -241,6 +241,7 @@ jobs:
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
           API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.sha }}
+          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
           BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
         run: |
@@ -253,6 +254,7 @@ jobs:
                 ASPNETCORE_ENVIRONMENT=Testbed \
                 DOTNET_ENVIRONMENT=Testbed \
                 Realtime__EnableJobStatusConsumer=false \
+                ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
                 Storage__Provider=AzureBlob \
                 Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
                 Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME"
@@ -268,6 +270,7 @@ jobs:
                 ASPNETCORE_ENVIRONMENT=Testbed \
                 DOTNET_ENVIRONMENT=Testbed \
                 Realtime__EnableJobStatusConsumer=false \
+                ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
                 Storage__Provider=AzureBlob \
                 Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
                 Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME"
