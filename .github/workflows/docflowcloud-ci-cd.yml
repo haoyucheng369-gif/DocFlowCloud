@@ -332,15 +332,14 @@ jobs:
   # ------------------------------------------------------------
   # 4. Deploy to testbed
   # ------------------------------------------------------------
-  # First cloud pass deploys only:
+  # Current testbed deployment includes:
   # - api
   # - web
+  # - worker
   #
-  # It intentionally does not deploy worker or notification-service yet.
-  # The API also disables the realtime RabbitMQ consumer while already using
-  # Azure SQL and Azure Blob so the first Azure deployment proves the delivery
-  # chain without requiring
-  # all backend infrastructure to exist already.
+  # notification-service is still deferred.
+  # The API keeps the realtime consumer disabled while testbed messaging is
+  # moved to Azure Service Bus.
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
@@ -459,15 +458,75 @@ jobs:
                 RUNTIME_APP_ENV=testbed
           fi
 
+      - name: Deploy Worker to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          WORKER_APP_NAME: docflow-worker-testbed
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.sha }}
+          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
+          BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
+          BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_CONNECTION_STRING: ${{ secrets.TESTBED_SERVICEBUS_CONNECTION_STRING }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          if az containerapp show --name "$WORKER_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$WORKER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$WORKER_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__ConnectionString="$SERVICEBUS_CONNECTION_STRING" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          else
+            az containerapp create \
+              --name "$WORKER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$WORKER_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__ConnectionString="$SERVICEBUS_CONNECTION_STRING" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          fi
+
       - name: Summarize first testbed deployment scope
         if: steps.testbed-ready.outputs.ready == 'true'
         run: |
           echo "Current first-pass cloud deployment scope:"
           echo "- web: deployed"
           echo "- api: deployed"
-          echo "- worker: not deployed yet"
+          echo "- worker: deployed"
           echo "- notification-service: not deployed yet"
           echo "- API realtime consumer disabled in cloud testbed"
+          echo "- worker messaging provider: Azure Service Bus"
           echo "- API database: Azure SQL"
           echo "- API storage: Azure Blob"
 

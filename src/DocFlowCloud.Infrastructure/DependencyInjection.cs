@@ -1,3 +1,4 @@
+using Azure.Messaging.ServiceBus;
 using DocFlowCloud.Application.Abstractions.Messaging;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Abstractions.Storage;
@@ -11,8 +12,9 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace DocFlowCloud.Infrastructure;
 
-// Infrastructure 注册入口：
-// 统一把数据库、RabbitMQ、文件存储和仓储实现注入到 DI 容器里。
+// Infrastructure 注入入口：
+// 当前把“文件存储 provider”和“消息 provider”都集中在这里做配置切换。
+// 这样应用层只依赖抽象接口，不直接关心 Local / AzureBlob / RabbitMq / ServiceBus 的具体实现。
 public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(
@@ -26,20 +28,38 @@ public static class DependencyInjection
             .GetSection(RabbitMqSettings.SectionName)
             .Get<RabbitMqSettings>() ?? new RabbitMqSettings();
 
+        var messagingSettings = configuration
+            .GetSection(MessagingSettings.SectionName)
+            .Get<MessagingSettings>() ?? new MessagingSettings();
+
+        var serviceBusSettings = configuration
+            .GetSection(ServiceBusSettings.SectionName)
+            .Get<ServiceBusSettings>() ?? new ServiceBusSettings();
+
         var storageSettings = configuration
             .GetSection(StorageSettings.SectionName)
             .Get<StorageSettings>() ?? new StorageSettings();
 
         services.AddSingleton(rabbitMqSettings);
+        services.AddSingleton(messagingSettings);
+        services.AddSingleton(serviceBusSettings);
         services.AddSingleton(storageSettings);
 
-        // RabbitMQ 基础设施：
-        // 连接提供器负责复用长连接，拓扑初始化器负责统一声明队列结构。
+        // RabbitMQ 相关基础设施先继续注册：
+        // 本地 Development 仍然需要 RabbitMQ 调试能力，等云上完全切完后再决定要不要进一步拆分注册。
         services.AddSingleton<IRabbitMqConnectionProvider, RabbitMqConnectionProvider>();
         services.AddSingleton<IRabbitMqTopologyInitializer, RabbitMqTopologyInitializer>();
 
-        // 当前默认走 Local，共享目录适合本地联调；
-        // 上云后把 Provider 切到 AzureBlob 即可。
+        if (string.Equals(messagingSettings.Provider, "ServiceBus", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(serviceBusSettings.ConnectionString))
+            {
+                throw new InvalidOperationException("ServiceBus provider requires a non-empty ServiceBus:ConnectionString.");
+            }
+
+            services.AddSingleton(_ => new ServiceBusClient(serviceBusSettings.ConnectionString));
+        }
+
         if (string.Equals(storageSettings.Provider, "Local", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<IFileStorage, LocalFileStorage>();
@@ -54,9 +74,20 @@ public static class DependencyInjection
                 $"Unsupported storage provider '{storageSettings.Provider}'. Supported values: Local, AzureBlob.");
         }
 
-        // 应用层仓储和消息发布器。
         services.AddScoped<IJobRepository, JobRepository>();
-        services.AddScoped<IJobMessagePublisher, RabbitMqJobMessagePublisher>();
+
+        // 发送侧先按 provider 切换：
+        // 本地继续发 RabbitMQ，testbed/prod 切到 Service Bus。
+        // 这样可以先完成“Outbox -> 消息总线”的迁移，再分阶段切消费者。
+        if (string.Equals(messagingSettings.Provider, "ServiceBus", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddScoped<IJobMessagePublisher, ServiceBusJobMessagePublisher>();
+        }
+        else
+        {
+            services.AddScoped<IJobMessagePublisher, RabbitMqJobMessagePublisher>();
+        }
+
         services.AddScoped<IInboxMessageRepository, InboxMessageRepository>();
         services.AddScoped<IOutboxMessageRepository, OutboxMessageRepository>();
 
