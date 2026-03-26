@@ -14,17 +14,23 @@ public sealed class SystemController : ControllerBase
 {
     private readonly IConfiguration _configuration;
     private readonly IHostEnvironment _hostEnvironment;
+    private readonly MessagingSettings _messagingSettings;
+    private readonly ServiceBusSettings _serviceBusSettings;
     private readonly RabbitMqSettings _rabbitMqSettings;
     private readonly StorageSettings _storageSettings;
 
     public SystemController(
         IConfiguration configuration,
         IHostEnvironment hostEnvironment,
+        MessagingSettings messagingSettings,
+        ServiceBusSettings serviceBusSettings,
         RabbitMqSettings rabbitMqSettings,
         StorageSettings storageSettings)
     {
         _configuration = configuration;
         _hostEnvironment = hostEnvironment;
+        _messagingSettings = messagingSettings;
+        _serviceBusSettings = serviceBusSettings;
         _rabbitMqSettings = rabbitMqSettings;
         _storageSettings = storageSettings;
     }
@@ -35,16 +41,27 @@ public sealed class SystemController : ControllerBase
         // 这里只故意只暴露“环境识别信息”，不把完整连接串直接返回给前端。
         var (databaseServer, databaseName) = ReadDatabaseTarget(
             _configuration.GetConnectionString("DefaultConnection"));
+        var (messagingProvider, messagingTarget) = ReadMessagingTarget();
 
         return Ok(new SystemEnvironmentDto
         {
             ApiEnvironment = _hostEnvironment.EnvironmentName,
             DatabaseServer = databaseServer,
             DatabaseName = databaseName,
-            RabbitMqHost = _rabbitMqSettings.HostName,
-            RabbitMqVirtualHost = _rabbitMqSettings.VirtualHost,
+            MessagingProvider = messagingProvider,
+            MessagingTarget = messagingTarget,
             StorageProvider = _storageSettings.Provider
         });
+    }
+
+    private (string Provider, string Target) ReadMessagingTarget()
+    {
+        if (string.Equals(_messagingSettings.Provider, "ServiceBus", StringComparison.OrdinalIgnoreCase))
+        {
+            return ("ServiceBus", $"{_serviceBusSettings.TopicName} / {_serviceBusSettings.WorkerSubscriptionName}");
+        }
+
+        return ("RabbitMq", $"{_rabbitMqSettings.HostName} ({_rabbitMqSettings.VirtualHost})");
     }
 
     private static (string DatabaseServer, string DatabaseName) ReadDatabaseTarget(string? connectionString)

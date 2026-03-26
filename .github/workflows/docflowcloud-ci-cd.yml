@@ -336,10 +336,9 @@ jobs:
   # - api
   # - web
   # - worker
+  # - notification-service
   #
-  # notification-service is still deferred.
-  # The API keeps the realtime consumer disabled while testbed messaging is
-  # moved to Azure Service Bus.
+  # testbed messaging is now routed through Azure Service Bus.
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
@@ -386,6 +385,11 @@ jobs:
           SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
           BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_CONNECTION_STRING: ${{ secrets.TESTBED_SERVICEBUS_CONNECTION_STRING }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
         run: |
           if az containerapp show --name "$API_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp update \
@@ -395,11 +399,17 @@ jobs:
               --set-env-vars \
                 ASPNETCORE_ENVIRONMENT=Testbed \
                 DOTNET_ENVIRONMENT=Testbed \
-                Realtime__EnableJobStatusConsumer=false \
+                Messaging__Provider=ServiceBus \
+                Realtime__EnableJobStatusConsumer=true \
                 ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
                 Storage__Provider=AzureBlob \
                 Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
-                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME"
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__ConnectionString="$SERVICEBUS_CONNECTION_STRING" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
           else
             az containerapp create \
               --name "$API_APP_NAME" \
@@ -411,11 +421,17 @@ jobs:
               --env-vars \
                 ASPNETCORE_ENVIRONMENT=Testbed \
                 DOTNET_ENVIRONMENT=Testbed \
-                Realtime__EnableJobStatusConsumer=false \
+                Messaging__Provider=ServiceBus \
+                Realtime__EnableJobStatusConsumer=true \
                 ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
                 Storage__Provider=AzureBlob \
                 Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
-                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME"
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__ConnectionString="$SERVICEBUS_CONNECTION_STRING" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
           fi
 
       - name: Capture testbed API URL
@@ -517,6 +533,65 @@ jobs:
                 ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
           fi
 
+      - name: Deploy NotificationService to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          NOTIFICATION_APP_NAME: docflow-notification-testbed
+          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.sha }}
+          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
+          BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
+          BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_CONNECTION_STRING: ${{ secrets.TESTBED_SERVICEBUS_CONNECTION_STRING }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          if az containerapp show --name "$NOTIFICATION_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$NOTIFICATION_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$NOTIFICATION_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__ConnectionString="$SERVICEBUS_CONNECTION_STRING" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          else
+            az containerapp create \
+              --name "$NOTIFICATION_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$NOTIFICATION_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                ConnectionStrings__DefaultConnection="$SQL_CONNECTION_STRING" \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ConnectionString="$BLOB_CONNECTION_STRING" \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__ConnectionString="$SERVICEBUS_CONNECTION_STRING" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          fi
+
       - name: Summarize first testbed deployment scope
         if: steps.testbed-ready.outputs.ready == 'true'
         run: |
@@ -524,9 +599,10 @@ jobs:
           echo "- web: deployed"
           echo "- api: deployed"
           echo "- worker: deployed"
-          echo "- notification-service: not deployed yet"
-          echo "- API realtime consumer disabled in cloud testbed"
+          echo "- notification-service: deployed"
+          echo "- API realtime consumer: Azure Service Bus"
           echo "- worker messaging provider: Azure Service Bus"
+          echo "- notification messaging provider: Azure Service Bus"
           echo "- API database: Azure SQL"
           echo "- API storage: Azure Blob"
 

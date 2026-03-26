@@ -98,10 +98,10 @@ export function Layout({ children }: PropsWithChildren) {
               }
             />
             <EnvironmentChip
-              label="RabbitMQ"
+              label="Messaging"
               value={
                 environment
-                  ? `${environment.rabbitMqHost} (${environment.rabbitMqVirtualHost})`
+                  ? `${environment.messagingProvider} (${environment.messagingTarget})`
                   : environmentFallback
               }
             />
