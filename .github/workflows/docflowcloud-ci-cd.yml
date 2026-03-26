@@ -204,8 +204,35 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect database migration changes
+        id: db-change-check
+        shell: bash
+        run: |
+          BEFORE_SHA="${{ github.event.before }}"
+          CURRENT_SHA="${{ github.sha }}"
+
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "No previous commit available; migrator will run."
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -E '^src/DocFlowCloud\.Infrastructure/Migrations/' > /dev/null; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "Database migration files changed; migrator will run."
+          else
+            echo "run_migrator=false" >> "$GITHUB_OUTPUT"
+            echo "No migration files changed; migrator will be skipped."
+          fi
 
       - name: Azure login
+        if: steps.db-change-check.outputs.run_migrator == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -213,9 +240,11 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Ensure Azure Container Apps extension is available
+        if: steps.db-change-check.outputs.run_migrator == 'true'
         run: az extension add --name containerapp --upgrade --yes
 
       - name: Create or update testbed migrator job
+        if: steps.db-change-check.outputs.run_migrator == 'true'
         env:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
@@ -258,6 +287,7 @@ jobs:
           fi
 
       - name: Start testbed migrator job and wait for completion
+        if: steps.db-change-check.outputs.run_migrator == 'true'
         env:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           MIGRATOR_JOB_NAME: docflow-migrator-testbed
@@ -292,6 +322,12 @@ jobs:
 
           echo "Timed out waiting for migrator execution to complete."
           exit 1
+
+      - name: Skip testbed migrator
+        if: steps.db-change-check.outputs.run_migrator != 'true'
+        run: |
+          echo "No EF migration files changed in this push."
+          echo "Skipping testbed migrator to keep deployment fast."
 
   # ------------------------------------------------------------
   # 4. Deploy to testbed
