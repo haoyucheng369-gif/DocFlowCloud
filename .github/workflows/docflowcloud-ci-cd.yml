@@ -233,7 +233,7 @@ jobs:
               --name "$MIGRATOR_JOB_NAME" \
               --resource-group "$RESOURCE_GROUP" \
               --image "$MIGRATOR_IMAGE" \
-              --env-vars \
+              --set-env-vars \
                 ASPNETCORE_ENVIRONMENT=Testbed \
                 DOTNET_ENVIRONMENT=Testbed \
                 ConnectionStrings__DefaultConnection=secretref:sql-connection-string
