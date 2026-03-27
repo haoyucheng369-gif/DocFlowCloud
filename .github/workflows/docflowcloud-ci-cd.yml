@@ -239,6 +239,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Read testbed SQL secret from Key Vault
+        if: steps.db-change-check.outputs.run_migrator == 'true'
+        id: migrator-kv
+        env:
+          KEY_VAULT_NAME: ${{ vars.TESTBED_KEY_VAULT_NAME }}
+        run: |
+          SQL_CONNECTION_STRING=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name sql-connection-string \
+            --query value -o tsv)
+
+          echo "::add-mask::$SQL_CONNECTION_STRING"
+          echo "sql_connection_string=$SQL_CONNECTION_STRING" >> "$GITHUB_OUTPUT"
+
       - name: Ensure Azure Container Apps extension is available
         if: steps.db-change-check.outputs.run_migrator == 'true'
         run: az extension add --name containerapp --upgrade --yes
@@ -250,7 +264,7 @@ jobs:
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           MIGRATOR_JOB_NAME: docflow-migrator-testbed
           MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.sha }}
-          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
+          SQL_CONNECTION_STRING: ${{ steps.migrator-kv.outputs.sql_connection_string }}
         run: |
           if az containerapp job show --name "$MIGRATOR_JOB_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp job secret set \
@@ -371,6 +385,35 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Read testbed runtime secrets from Key Vault
+        if: steps.testbed-ready.outputs.ready == 'true'
+        id: testbed-kv
+        env:
+          KEY_VAULT_NAME: ${{ vars.TESTBED_KEY_VAULT_NAME }}
+        run: |
+          SQL_CONNECTION_STRING=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name sql-connection-string \
+            --query value -o tsv)
+
+          BLOB_CONNECTION_STRING=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name blob-connection-string \
+            --query value -o tsv)
+
+          SERVICEBUS_CONNECTION_STRING=$(az keyvault secret show \
+            --vault-name "$KEY_VAULT_NAME" \
+            --name servicebus-connection-string \
+            --query value -o tsv)
+
+          echo "::add-mask::$SQL_CONNECTION_STRING"
+          echo "::add-mask::$BLOB_CONNECTION_STRING"
+          echo "::add-mask::$SERVICEBUS_CONNECTION_STRING"
+
+          echo "sql_connection_string=$SQL_CONNECTION_STRING" >> "$GITHUB_OUTPUT"
+          echo "blob_connection_string=$BLOB_CONNECTION_STRING" >> "$GITHUB_OUTPUT"
+          echo "servicebus_connection_string=$SERVICEBUS_CONNECTION_STRING" >> "$GITHUB_OUTPUT"
+
       - name: Ensure Azure Container Apps extension is available
         if: steps.testbed-ready.outputs.ready == 'true'
         run: az extension add --name containerapp --upgrade --yes
@@ -382,10 +425,10 @@ jobs:
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
           API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.sha }}
-          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
-          BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
+          SQL_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.sql_connection_string }}
+          BLOB_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.blob_connection_string }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
-          SERVICEBUS_CONNECTION_STRING: ${{ secrets.TESTBED_SERVICEBUS_CONNECTION_STRING }}
+          SERVICEBUS_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.servicebus_connection_string }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
           SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
@@ -481,10 +524,10 @@ jobs:
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           WORKER_APP_NAME: docflow-worker-testbed
           WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.sha }}
-          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
-          BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
+          SQL_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.sql_connection_string }}
+          BLOB_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.blob_connection_string }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
-          SERVICEBUS_CONNECTION_STRING: ${{ secrets.TESTBED_SERVICEBUS_CONNECTION_STRING }}
+          SERVICEBUS_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.servicebus_connection_string }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
           SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
@@ -540,10 +583,10 @@ jobs:
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           NOTIFICATION_APP_NAME: docflow-notification-testbed
           NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.sha }}
-          SQL_CONNECTION_STRING: ${{ secrets.TESTBED_SQL_CONNECTION_STRING }}
-          BLOB_CONNECTION_STRING: ${{ secrets.TESTBED_BLOB_CONNECTION_STRING }}
+          SQL_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.sql_connection_string }}
+          BLOB_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.blob_connection_string }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
-          SERVICEBUS_CONNECTION_STRING: ${{ secrets.TESTBED_SERVICEBUS_CONNECTION_STRING }}
+          SERVICEBUS_CONNECTION_STRING: ${{ steps.testbed-kv.outputs.servicebus_connection_string }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
           SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
