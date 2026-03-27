@@ -4,12 +4,14 @@ DocFlowCloud is a portfolio-style asynchronous document-to-PDF system built to d
 
 - ASP.NET Core API
 - React + TypeScript frontend
-- RabbitMQ-based background processing
+- environment-specific messaging:
+  - local development uses RabbitMQ
+  - cloud testbed uses Azure Service Bus
 - Outbox / Inbox reliability patterns
 - Retry / DLQ / Backoff
 - Stale-processing recovery
 - SignalR realtime updates
-- Local file storage with Azure Blob extension point
+- Local file storage in development and Azure Blob in cloud testbed
 - Multi-environment local setup for `Development` and `Testbed`
 
 ## What It Does
@@ -41,7 +43,7 @@ Supported inputs:
 - `src/DocFlowCloud.Domain`
   - entities, state rules, outbox / inbox models
 - `src/DocFlowCloud.Infrastructure`
-  - EF Core, RabbitMQ, local storage, Azure Blob extension point
+  - EF Core, RabbitMQ / Service Bus providers, local storage, Azure Blob
 
 ## Architecture
 
@@ -53,7 +55,7 @@ flowchart LR
     DB[(SQL Server)]
     FS[(Local Storage / Azure Blob)]
     O[OutboxPublisherWorker]
-    MQ[(RabbitMQ)]
+    MQ[(RabbitMQ / Azure Service Bus)]
     WK[DocFlowCloud.Worker]
     NS[DocFlowCloud.NotificationService]
 
@@ -82,10 +84,10 @@ sequenceDiagram
     participant Api as API
     participant DB as SQL Server
     participant Outbox as OutboxPublisherWorker
-    participant MQ as RabbitMQ
-    participant Worker as RabbitMqWorker
+    participant MQ as RabbitMQ or Azure Service Bus
+    participant Worker as Background Worker
     participant Storage as FileStorage
-    participant Realtime as JobStatusUpdatesConsumer
+    participant Realtime as Realtime Consumer
 
     User->>Web: Upload file
     Web->>Api: POST /document-to-pdf
@@ -155,8 +157,8 @@ SignalR is used for browser updates:
 
 The database stores logical file keys, not file contents.
 
-- current provider: `Local`
-- extension point: `AzureBlob`
+- Development provider: `Local`
+- Testbed provider: `AzureBlob`
 
 Important keys:
 
@@ -197,6 +199,21 @@ One-off containers:
 - `rabbitmq-init`
   - creates local RabbitMQ virtual hosts and permissions
 
+## Cloud Testbed
+
+Current testbed deployment runs on Azure and includes:
+
+- Azure Container Apps:
+  - `web`
+  - `api`
+  - `worker`
+  - `notification-service`
+- Azure SQL Database
+- Azure Blob Storage
+- Azure Service Bus
+- Key Vault-backed runtime secrets
+- GitHub Actions + GHCR + Azure deployment flow
+
 ## Local Run
 
 ### Option A: Day-to-day development
@@ -236,7 +253,7 @@ Expected banner values:
 
 - Frontend: `testbed`
 - API: `Testbed`
-- RabbitMQ vhost: `/docflow-testbed`
+- Messaging: `ServiceBus`
 - Database: `DocFlowCloudTestbedDb`
 
 ## Important Entry Points
@@ -244,11 +261,11 @@ Expected banner values:
 Backend:
 
 - `src/DocFlowCloud.Application/Jobs/JobService.cs`
-- `src/DocFlowCloud.Worker/RabbitMqWorker.cs`
+- `src/DocFlowCloud.Worker/ServiceBusWorker.cs`
 - `src/DocFlowCloud.Worker/OutboxPublisherWorker.cs`
 - `src/DocFlowCloud.Worker/StaleInboxRecoveryWorker.cs`
 - `src/DocFlowCloud.Worker/JobSideEffectExecutor.cs`
-- `src/DocFlowCloud.Api/Realtime/JobStatusUpdatesConsumer.cs`
+- `src/DocFlowCloud.Api/Realtime/ServiceBusJobStatusUpdatesConsumer.cs`
 - `src/DocFlowCloud.Domain/Jobs/Job.cs`
 - `src/DocFlowCloud.Domain/Inbox/InboxMessage.cs`
 
@@ -272,9 +289,6 @@ Environment / deployment:
 
 ## Next Steps
 
-- CI/CD pipeline
-- Azure Blob real integration
-- cloud `Testbed` deployment
-- Key Vault / secrets separation
+- Production environment
 - Terraform for infrastructure
 - observability improvements

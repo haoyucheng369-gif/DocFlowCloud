@@ -1,103 +1,104 @@
 # 系统流程图
 
-这份文档说明当前 DocFlowCloud 中，一个“上传文档并异步转 PDF”的请求是如何流转的。
+这份文档描述当前 `DocFlowCloud` 在两种环境下的真实消息链：
 
-## 主流程
+- **本地 Development**：继续使用 RabbitMQ，方便调试和断点
+- **云上 Testbed**：使用 Azure Service Bus，走真实云消息基础设施
+
+## 当前云上主链
 
 ```mermaid
 flowchart TD
     A[前端上传文件] --> B[POST /api/jobs/document-to-pdf]
     B --> C[JobService.CreateDocumentToPdfAsync]
-    C --> D[保存原文件到存储层]
+    C --> D[保存原文件到 Azure Blob]
     C --> E[(Jobs)]
     C --> F[(OutboxMessages)]
     F --> G[OutboxPublisherWorker]
-    G --> H[Topic Exchange: docflow.events]
-    H --> I[Queue: docflow.jobs]
-    H --> J[Queue: docflow.notifications]
-    I --> K[DocFlowCloud.Worker]
-    J --> L[DocFlowCloud.NotificationService]
-    K --> M[(InboxMessages)]
-    L --> M
-    K --> N[JobSideEffectExecutor]
-    N --> O[保存结果 PDF 到存储层]
-    K --> E
+    G --> H[Azure Service Bus Topic: job-events]
+    H --> I[Subscription: worker]
+    H --> J[Subscription: notification]
+    H --> K[Subscription: api-realtime]
+    I --> L[DocFlowCloud.Worker]
+    J --> M[DocFlowCloud.NotificationService]
+    K --> N[ServiceBusJobStatusUpdatesConsumer]
+    L --> O[(InboxMessages)]
+    L --> P[JobSideEffectExecutor]
+    P --> Q[保存结果 PDF 到 Azure Blob]
+    L --> E
+    N --> R[SignalR Hub]
+    R --> S[前端实时刷新状态]
 ```
 
 ## 从上传到处理完成
 
 1. 前端上传一个图片、txt、md 或 html 文件。
-2. API 接收文件并调用 `JobService.CreateDocumentToPdfAsync(...)`。
-3. `JobService` 先把原文件保存到存储层，拿到 `InputStorageKey`。
-4. `JobService` 在同一个数据库提交里写入：
+2. API 调用 `JobService.CreateDocumentToPdfAsync(...)`。
+3. `JobService` 先把原文件写入存储层，拿到 `InputStorageKey`。
+4. `JobService` 在同一个数据库事务里写入：
    - 一条 `Job`
    - 一条 `OutboxMessage`
-5. `OutboxPublisherWorker` 扫描到未处理 Outbox，发布 `job.created`。
-6. RabbitMQ 把同一个事件分发到：
-   - `docflow.jobs`
-   - `docflow.notifications`
-7. `DocFlowCloud.Worker` 消费任务处理队列。
-8. `DocFlowCloud.NotificationService` 消费通知队列。
-9. `DocFlowCloud.Worker` 从存储层读取原文件，执行文档转 PDF。
-10. Worker 把生成好的 PDF 保存回存储层，拿到 `OutputStorageKey`。
-11. Worker 事务化提交：
-   - `Job = Succeeded`
-   - `Inbox = Processed`
-12. 前端轮询任务状态，成功后下载 PDF。
+5. `OutboxPublisherWorker` 扫描未发布 Outbox，把 `job.created` 发到 Azure Service Bus Topic `job-events`。
+6. `worker` subscription 被 `DocFlowCloud.Worker` 消费。
+7. `notification` subscription 被 `DocFlowCloud.NotificationService` 消费。
+8. Worker 从 Azure Blob 读取原文件，执行文档转 PDF。
+9. Worker 把生成好的 PDF 保存回 Azure Blob，并更新数据库中的 `Job` / `InboxMessage`。
+10. Worker 发布 `job.status.changed` 到同一个 Topic。
+11. `api-realtime` subscription 被 API 里的 `ServiceBusJobStatusUpdatesConsumer` 消费。
+12. API 通过 SignalR 把 `jobUpdated` 推给前端，前端实时更新状态。
 
-## Job Worker 消费流程
+## Worker 消费流程
 
 ```mermaid
 flowchart TD
-    A[收到 job.created] --> B[TryClaimAsync for JobConsumer]
-    B -->|Claim 失败| C[Ack 并跳过]
-    B -->|Claim 成功| D{Job 是否已经成功?}
-    D -->|是| E[只把 Inbox 标记为 Processed]
-    E --> C
-    D -->|否| F[从存储层读取原文件]
+    A[收到 job.created] --> B[TryClaimAsync for Worker]
+    B -->|Claim 失败| C[跳过重复消费]
+    B -->|Claim 成功| D{Job 是否已完成?}
+    D -->|是| E[只更新 Inbox=Processed]
+    D -->|否| F[从 Azure Blob 读取原文件]
     F --> G[执行文档转 PDF]
-    G --> H[把结果 PDF 写回存储层]
-    H --> I[事务提交 Job + Inbox]
-    I --> J[Job 标记为 Succeeded]
-    I --> K[Inbox 标记为 Processed]
-    J --> C
-    K --> C
+    G --> H[保存结果 PDF 到 Azure Blob]
+    H --> I[提交事务更新 Job 和 Inbox]
+    I --> J[发布 job.status.changed]
 ```
 
 ## Notification Service 流程
 
 ```mermaid
 flowchart TD
-    A[收到 job.created] --> B[TryClaimAsync for NotificationConsumer]
-    B -->|Claim 失败| C[Ack 并跳过]
-    B -->|Claim 成功| D[模拟发送通知]
+    A[收到 job.created] --> B[TryClaimAsync for Notification]
+    B -->|Claim 失败| C[跳过重复消费]
+    B -->|Claim 成功| D[执行通知逻辑]
     D --> E[Inbox 标记为 Processed]
-    E --> C
 ```
 
-## 失败与恢复流程
+## 失败与恢复
 
 ```mermaid
 flowchart TD
-    A[Worker 处理异常] --> B[先把 Job / Inbox 标记为 Failed]
-    B --> C{错误可重试吗?}
-    C -->|是| D[发送到 retry queue]
-    D --> E[按 Backoff 延迟]
-    E --> F[回到主队列重新处理]
-    C -->|否| G[进入 DLQ]
-    H[消息长时间停在 Processing] --> I[StaleInboxRecoveryWorker 扫描到超时]
-    I --> J[自动补一条新的 Outbox]
-    J --> K[主流程重新执行]
+    A[Worker 处理异常] --> B{可重试吗?}
+    B -->|是| C[Abandon 消息]
+    C --> D[Service Bus 重新投递]
+    B -->|否| E[Dead-letter 到 DLQ]
+    F[StaleInboxRecoveryWorker] --> G[扫描长期卡在 Processing 的 Inbox]
+    G --> H[恢复 Job 状态]
+    H --> I[写入新的 OutboxMessage]
+    I --> J[OutboxPublisherWorker 重新发消息]
 ```
 
-## CorrelationId 链路
+## 环境差异
 
-1. API 从请求头读取或生成 `X-Correlation-Id`
-2. 写入响应头和日志上下文
-3. `JobService` 把同一个 `CorrelationId` 写入消息
-4. Worker 消费消息时恢复这个 `CorrelationId`
-5. 最终你可以用同一个编号串起：
-   - API 日志
-   - Outbox 发布
-   - Job Worker 日志
-   - Notification Service 日志
+### 本地 Development
+
+- SQL Server：本地 Docker
+- 消息系统：RabbitMQ
+- 文件存储：Local
+- 目的：快速调试、断点、低成本开发
+
+### 云上 Testbed
+
+- Azure SQL Database
+- Azure Service Bus
+- Azure Blob Storage
+- Azure Container Apps
+- 目的：验证完整云上交付链和真实运行环境

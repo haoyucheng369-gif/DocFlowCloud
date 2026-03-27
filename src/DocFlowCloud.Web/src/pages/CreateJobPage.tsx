@@ -112,11 +112,11 @@ export function CreateJobPage() {
     },
     {
       title: "Backend",
-      items: ["ASP.NET Core", "RabbitMQ", "Outbox / Inbox", "Retry / DLQ", "Local / Blob Storage"]
+      items: ["ASP.NET Core", "Azure Service Bus", "Outbox / Inbox", "Retry / DLQ", "Azure Blob Storage"]
     },
     {
       title: "Delivery",
-      items: ["Docker Compose", "Testbed / Production", "Health Checks", "Unit + Integration Tests"]
+      items: ["Docker Compose", "GitHub Actions", "Azure Container Apps", "Health Checks", "Unit + Integration Tests"]
     }
   ];
 
@@ -163,7 +163,7 @@ export function CreateJobPage() {
                 <div className="flex items-start justify-between gap-4">
                   <dt className="text-slate-500">Execution</dt>
                   <dd className="text-right font-medium text-slate-800">
-                    API + RabbitMQ + Worker
+                    API + Service Bus + Worker
                   </dd>
                 </div>
                 <div className="flex items-start justify-between gap-4">
@@ -175,7 +175,7 @@ export function CreateJobPage() {
                 <div className="flex items-start justify-between gap-4">
                   <dt className="text-slate-500">Storage</dt>
                   <dd className="text-right font-medium text-slate-800">
-                    Local now, Azure Blob ready
+                    Local in development, Azure Blob in testbed
                   </dd>
                 </div>
               </dl>
@@ -227,7 +227,7 @@ export function CreateJobPage() {
               {[
                 ["1", "Client Upload", "The browser sends one or more files to the API."],
                 ["2", "Job + Outbox", "The API stores the file, creates the job, and writes the outbox message."],
-                ["3", "Queue Publish", "OutboxPublisherWorker sends the message to RabbitMQ."],
+                ["3", "Queue Publish", "OutboxPublisherWorker sends the message to Azure Service Bus."],
                 ["4", "Worker Execute", "The worker claims the message, converts the file, and stores the PDF result."],
                 ["5", "Status Push", "A status-changed event reaches the API, then SignalR notifies the frontend."]
               ].map(([step, title, description]) => (
