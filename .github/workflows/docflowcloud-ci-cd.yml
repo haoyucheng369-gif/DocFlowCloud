@@ -1,4 +1,4 @@
-name: DocFlowCloud CI/CD
+﻿name: DocFlowCloud CI/CD
 
 # ============================================================
 # 文档说明：
@@ -617,12 +617,15 @@ jobs:
           echo "CI and GHCR image publication still succeeded."
 
   # ------------------------------------------------------------
-  # 5. production promote 占位流程
+  # 5. production promote
   # ------------------------------------------------------------
-  # production 现在仍然保留手动 promote 骨架：
-  # - 必须复用 testbed 已验证过的镜像 tag
-  # - 不重新 build
-  # - 后面再补完整 prod 资源和审批流
+  # production 复用已经在 testbed 验证通过的 image tag。
+  # workflow 不重新 build，只负责：
+  # - 按需运行 prod migrator
+  # - 更新 prod api / web / worker / notification-service 镜像
+  # - 注入非敏感配置
+  #
+  # 运行时 secret 继续由 ACA secret reference + Managed Identity + Key Vault 提供。
   deploy-production:
     name: Deploy to production
     runs-on: ubuntu-latest
@@ -633,6 +636,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Detect Azure production deployment readiness
         id: production-ready
@@ -644,6 +649,31 @@ jobs:
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Detect production database migration changes
+        id: prod-db-change-check
+        if: steps.production-ready.outputs.ready == 'true'
+        shell: bash
+        run: |
+          CURRENT_SHA=$(git rev-parse HEAD)
+          PREVIOUS_SHA=$(git rev-parse HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_SHA" ]; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "No previous commit available on master; prod migrator will run."
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$PREVIOUS_SHA" "$CURRENT_SHA")
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -E '^src/DocFlowCloud\.Infrastructure/Migrations/' > /dev/null; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "Database migration files changed; prod migrator will run."
+          else
+            echo "run_migrator=false" >> "$GITHUB_OUTPUT"
+            echo "No migration files changed; prod migrator will be skipped."
+          fi
+
       - name: Azure login
         if: steps.production-ready.outputs.ready == 'true'
         uses: azure/login@v2
@@ -652,15 +682,214 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Placeholder production deploy step
+      - name: Ensure Azure Container Apps extension is available
+        if: steps.production-ready.outputs.ready == 'true'
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Validate production bootstrap resources
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+        run: |
+          for resource_name in \
+            docflow-api-prod \
+            docflow-web-prod \
+            docflow-worker-prod \
+            docflow-notification-prod
+          do
+            if ! az containerapp show --name "$resource_name" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+              echo "Required production container app '$resource_name' was not found."
+              echo "Production bootstrap must be completed in Azure before workflow promotion can manage images."
+              exit 1
+            fi
+          done
+
+          if ! az containerapp job show --name docflow-migrator-prod --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            echo "Required production migrator job 'docflow-migrator-prod' was not found."
+            exit 1
+          fi
+
+      - name: Update production migrator job
+        if: steps.production-ready.outputs.ready == 'true' && steps.prod-db-change-check.outputs.run_migrator == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ inputs.image_tag }}
+        run: |
+          az containerapp job update \
+            --name docflow-migrator-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$MIGRATOR_IMAGE" \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production
+
+      - name: Run production migrator and wait for completion
+        if: steps.production-ready.outputs.ready == 'true' && steps.prod-db-change-check.outputs.run_migrator == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+        run: |
+          EXECUTION_NAME=$(az containerapp job start \
+            --name docflow-migrator-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --query name -o tsv)
+
+          echo "Started production migrator execution: $EXECUTION_NAME"
+
+          for i in $(seq 1 60); do
+            STATUS=$(az containerapp job execution show \
+              --name docflow-migrator-prod \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$EXECUTION_NAME" \
+              --query properties.status -o tsv)
+
+            echo "Production migrator execution status: $STATUS"
+
+            if [ "$STATUS" = "Succeeded" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Canceled" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "Production migrator execution did not complete successfully."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for production migrator execution to complete."
+          exit 1
+
+      - name: Skip production migrator
+        if: steps.production-ready.outputs.ready == 'true' && steps.prod-db-change-check.outputs.run_migrator != 'true'
+        run: |
+          echo "No EF migration files changed on master."
+          echo "Skipping production migrator for this promote."
+
+      - name: Deploy API to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ inputs.image_tag }}
+          BLOB_CONTAINER_NAME: ${{ vars.PROD_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.PROD_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          az containerapp update \
+            --name docflow-api-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$API_IMAGE" \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production \
+              Messaging__Provider=ServiceBus \
+              Realtime__EnableJobStatusConsumer=true \
+              Storage__Provider=AzureBlob \
+              Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+              ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+              ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+              ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+              ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+
+      - name: Capture production API URL
+        if: steps.production-ready.outputs.ready == 'true'
+        id: prod-api-url
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+        run: |
+          API_FQDN=$(az containerapp show \
+            --name docflow-api-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "url=https://$API_FQDN" >> "$GITHUB_OUTPUT"
+          echo "Production API URL: https://$API_FQDN"
+
+      - name: Deploy Web to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ inputs.image_tag }}
+          API_BASE_URL: ${{ steps.prod-api-url.outputs.url }}
+        run: |
+          az containerapp update \
+            --name docflow-web-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$WEB_IMAGE" \
+            --set-env-vars \
+              RUNTIME_API_BASE_URL="$API_BASE_URL" \
+              RUNTIME_APP_ENV=production
+
+      - name: Deploy Worker to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ inputs.image_tag }}
+          BLOB_CONTAINER_NAME: ${{ vars.PROD_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.PROD_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          az containerapp update \
+            --name docflow-worker-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$WORKER_IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production \
+              Messaging__Provider=ServiceBus \
+              Storage__Provider=AzureBlob \
+              Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+              ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+              ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+              ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+              ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+
+      - name: Deploy NotificationService to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ inputs.image_tag }}
+          BLOB_CONTAINER_NAME: ${{ vars.PROD_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.PROD_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          az containerapp update \
+            --name docflow-notification-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$NOTIFICATION_IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production \
+              Messaging__Provider=ServiceBus \
+              Storage__Provider=AzureBlob \
+              Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+              ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+              ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+              ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+              ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+
+      - name: Summarize production promotion
         if: steps.production-ready.outputs.ready == 'true'
         run: |
-          echo "Deploy production with already-built image tag: ${{ inputs.image_tag }}"
-          echo "Production should reuse the image already validated in testbed."
-          echo "Replace this step with az containerapp update/create commands"
+          echo "Production promotion completed with image tag: ${{ inputs.image_tag }}"
+          echo "- prod migrator: conditional"
+          echo "- prod api: updated"
+          echo "- prod web: updated"
+          echo "- prod worker: updated"
+          echo "- prod notification-service: updated"
+          echo "- runtime secrets continue to come from ACA secret references and Key Vault"
 
       - name: Production deployment skipped
         if: steps.production-ready.outputs.ready != 'true'
         run: |
           echo "Production deployment was skipped because Azure secrets are not configured yet."
           echo "When Azure is ready, rerun workflow_dispatch from master with a validated image tag."
+
