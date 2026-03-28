@@ -8,9 +8,9 @@
 #    - 自动迁移 testbed 数据库
 #    - 部署 web / api / worker / notification-service 到 Azure testbed
 #
-# 2. master 分支：
-#    - 跑 CI
-#    - production 仍然通过手动 promote 触发
+# 2. production promote：
+#    - 不再依赖 master push 自动跑 CI
+#    - 通过 workflow_dispatch 手动 promote 已验证镜像
 #
 # 3. 当前 secret 策略：
 #    - GitHub 只保留 Azure 部署身份和非敏感环境变量
@@ -23,18 +23,17 @@ on:
   # - build and push images
   # - deploy to testbed
   #
-  # master branch:
-  # - run CI
-  # - production is promoted manually with an already-validated image tag
+  # production:
+  # - no automatic deploy from master push
+  # - promote a previously validated image tag manually
   push:
     branches:
       - test
-      - master
 
   # Pull requests only run CI checks.
   pull_request:
 
-  # Production promotion is manual.
+  # Production promotion is manual and uses a validated image tag from GHCR.
   workflow_dispatch:
     inputs:
       image_tag:
@@ -63,7 +62,7 @@ jobs:
   # ------------------------------------------------------------
   # 1. 通用 CI
   # ------------------------------------------------------------
-  # 所有 PR / test / master 都会先跑这一段。
+  # 所有 PR / test 都会先跑这一段。
   # 这里只做代码质量校验，不做云部署：
   # - restore
   # - build
@@ -73,6 +72,7 @@ jobs:
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
 
     steps:
       - name: Checkout repository
@@ -629,7 +629,6 @@ jobs:
   deploy-production:
     name: Deploy to production
     runs-on: ubuntu-latest
-    needs: build-and-test
     environment: production
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.image_tag != ''
 

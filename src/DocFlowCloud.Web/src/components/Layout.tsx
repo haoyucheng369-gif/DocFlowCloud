@@ -28,25 +28,34 @@ function getEnvironmentBadgeClass(environment?: string) {
 function EnvironmentChip({
   label,
   value,
+  fullValue,
   emphasize = false
 }: {
   label: string;
   value: string;
+  fullValue?: string;
   emphasize?: boolean;
 }) {
   return (
-    <span className="inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 align-middle ring-1 ring-slate-200">
-      <span className="inline-flex items-center text-[11px] font-semibold uppercase tracking-[0.12em] leading-none text-slate-500">
-        {label}
+    <span className="group relative inline-flex">
+      <span className="inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 align-middle ring-1 ring-slate-200">
+        <span className="inline-flex items-center text-[11px] font-semibold uppercase tracking-[0.12em] leading-none text-slate-500">
+          {label}
+        </span>
+        <span
+          className={[
+            "inline-flex max-w-[13rem] items-center truncate rounded-full px-2.5 py-1 text-[11px] font-semibold leading-none",
+            emphasize ? getEnvironmentBadgeClass(value) : "bg-slate-50 text-slate-700 ring-1 ring-slate-200"
+          ].join(" ")}
+        >
+          {value}
+        </span>
       </span>
-      <span
-        className={[
-          "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold leading-none",
-          emphasize ? getEnvironmentBadgeClass(value) : "bg-slate-50 text-slate-700 ring-1 ring-slate-200"
-        ].join(" ")}
-      >
-        {value}
-      </span>
+      {(fullValue ?? value) ? (
+        <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-max max-w-[22rem] -translate-x-1/2 rounded-2xl bg-slate-900 px-3 py-2 text-[11px] font-medium leading-5 text-white shadow-lg group-hover:block">
+          {fullValue ?? value}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -64,6 +73,25 @@ export function Layout({ children }: PropsWithChildren) {
 
   const frontendEnvironment = getRuntimeAppEnvironment();
   const environmentFallback = isEnvironmentLoading ? "Loading..." : "Unavailable";
+  const databaseValue = environment
+    ? environment.databaseName
+    : environmentFallback;
+  const databaseFullValue = environment
+    ? `${environment.databaseServer} / ${environment.databaseName}`
+    : environmentFallback;
+  const messagingValue = environment
+    ? environment.messagingProvider
+    : environmentFallback;
+  const messagingFullValue = environment
+    ? `${environment.messagingProvider} (${environment.messagingTarget})`
+    : environmentFallback;
+  const apiBaseUrlValue = (() => {
+    try {
+      return new URL(API_BASE_URL).host;
+    } catch {
+      return API_BASE_URL;
+    }
+  })();
 
   return (
     <div className="min-h-screen bg-mist text-ink">
@@ -91,25 +119,23 @@ export function Layout({ children }: PropsWithChildren) {
             />
             <EnvironmentChip
               label="Database"
-              value={
-                environment
-                  ? `${environment.databaseServer} / ${environment.databaseName}`
-                  : environmentFallback
-              }
+              value={databaseValue}
+              fullValue={databaseFullValue}
             />
             <EnvironmentChip
               label="Messaging"
-              value={
-                environment
-                  ? `${environment.messagingProvider} (${environment.messagingTarget})`
-                  : environmentFallback
-              }
+              value={messagingValue}
+              fullValue={messagingFullValue}
             />
             <EnvironmentChip
               label="Storage"
               value={environment?.storageProvider ?? environmentFallback}
             />
-            <EnvironmentChip label="API Base URL" value={API_BASE_URL} />
+            <EnvironmentChip
+              label="API Base URL"
+              value={apiBaseUrlValue}
+              fullValue={API_BASE_URL}
+            />
             {isEnvironmentError ? (
               <span className="inline-flex items-center rounded-full bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200">
                 Environment endpoint unavailable on current API instance.

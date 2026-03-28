@@ -1,30 +1,30 @@
-# 架构说明
+# Architecture
 
-`DocFlowCloud` 当前是一个异步文档转 PDF 系统，用来展示：
+`DocFlowCloud` is an asynchronous document-to-PDF system designed to demonstrate a realistic application architecture across local development, cloud testbed, and production.
 
-- ASP.NET Core API
-- React 前端
-- Outbox / Inbox 可靠性模式
-- Azure Blob 文件存储
-- Azure SQL 持久化
-- Azure Service Bus 云上消息链
-- SignalR 实时状态更新
-- GitHub Actions + GHCR + Azure Container Apps 交付链
+## Layers
 
-## 系统模块
+### `DocFlowCloud.Web`
+
+Responsibilities:
+
+- upload files
+- create jobs
+- display job list and detail
+- subscribe to SignalR updates
+- download the generated PDF
 
 ### `DocFlowCloud.Api`
 
-职责：
+Responsibilities:
 
-- 接收上传文件
-- 创建转换任务
-- 查询任务和结果
-- 下载 PDF
-- 提供 SignalR Hub
-- 在 testbed 中消费 `api-realtime` subscription 并推送实时更新
+- receive uploaded files
+- create conversion jobs
+- expose job query and result download endpoints
+- host the SignalR hub
+- consume realtime status updates in cloud environments
 
-关键文件：
+Key files:
 
 - `src/DocFlowCloud.Api/Program.cs`
 - `src/DocFlowCloud.Api/Controllers/JobsController.cs`
@@ -32,41 +32,41 @@
 
 ### `DocFlowCloud.Application`
 
-职责：
+Responsibilities:
 
-- 编排任务创建、重试、结果下载
-- 定义应用层 DTO / integration message
-- 定义文件存储和消息发布抽象
+- define use cases and orchestration rules
+- define integration messages and contracts
+- depend on abstractions instead of providers
 
-关键文件：
+Key files:
 
 - `src/DocFlowCloud.Application/Jobs/JobService.cs`
 - `src/DocFlowCloud.Application/Messaging/JobCreatedIntegrationMessage.cs`
 
 ### `DocFlowCloud.Domain`
 
-职责：
+Responsibilities:
 
-- 定义 `Job`
-- 定义 `InboxMessage`
-- 定义 `OutboxMessage`
-- 定义状态规则
+- define `Job`
+- define `InboxMessage`
+- define `OutboxMessage`
+- enforce state transitions
 
 ### `DocFlowCloud.Infrastructure`
 
-职责：
+Responsibilities:
 
-- EF Core 持久化
-- Local / Azure Blob 存储实现
-- RabbitMQ 与 Azure Service Bus provider
-- 依赖注入与环境切换
+- EF Core persistence
+- local / Azure Blob storage implementations
+- RabbitMQ / Azure Service Bus implementations
+- dependency injection and provider switching
 
-说明：
+Design note:
 
-- **本地 Development**：继续保留 RabbitMQ provider
-- **云上 Testbed**：切换到 Azure Service Bus provider
+- local `Development` keeps RabbitMQ and local storage
+- cloud `Testbed` / `Production` switch to Service Bus and Azure Blob
 
-关键文件：
+Key files:
 
 - `src/DocFlowCloud.Infrastructure/DependencyInjection.cs`
 - `src/DocFlowCloud.Infrastructure/Messaging/ServiceBusJobMessagePublisher.cs`
@@ -74,14 +74,14 @@
 
 ### `DocFlowCloud.Worker`
 
-职责：
+Responsibilities:
 
-- 扫描并发布 Outbox
-- 消费任务消息
-- 执行文档转换
-- 写入结果文件和最终状态
+- publish outbox messages
+- consume job messages
+- execute document conversion
+- update job state and result storage
 
-关键文件：
+Key files:
 
 - `src/DocFlowCloud.Worker/OutboxPublisherWorker.cs`
 - `src/DocFlowCloud.Worker/ServiceBusWorker.cs`
@@ -90,68 +90,80 @@
 
 ### `DocFlowCloud.NotificationService`
 
-职责：
+Responsibilities:
 
-- 订阅任务创建事件
-- 执行通知逻辑
-- 维护自己的 Inbox 处理状态
+- subscribe to job events
+- run secondary consumer logic
+- maintain its own inbox processing state
 
-关键文件：
+Key files:
 
 - `src/DocFlowCloud.NotificationService/ServiceBusNotificationWorker.cs`
 
-### `DocFlowCloud.Web`
+## Data and Storage
 
-职责：
+### Database
 
-- 上传文件
-- 创建任务
-- 查看任务列表和详情
-- 订阅 SignalR 状态更新
-- 下载 PDF
-
-## 数据和存储
-
-### 数据库
-
-主数据库记录：
+Primary tables:
 
 - `Jobs`
 - `InboxMessages`
 - `OutboxMessages`
 
-### 文件存储
+### File storage
 
-系统不把文件内容塞进数据库，而是：
+The database stores logical storage keys rather than file contents.
 
-- 原文件存到 Local 或 Azure Blob
-- 结果 PDF 存到 Local 或 Azure Blob
-- 数据库只存 `InputStorageKey` / `OutputStorageKey`
+- development: local file storage
+- cloud: Azure Blob Storage
 
-## 消息架构
+Important keys:
 
-### 本地
+- `InputStorageKey`
+- `OutputStorageKey`
+
+## Messaging Model
+
+### Local development
 
 - RabbitMQ
 
-### Testbed
+### Cloud testbed and production
 
-- Azure Service Bus Topic：`job-events`
-- Subscription：
+- Azure Service Bus topic: `job-events`
+- subscriptions:
   - `worker`
   - `notification`
   - `api-realtime`
 
-## 当前项目定位
+## Reliability Patterns
 
-这个仓库现在更适合理解成：
+- Outbox
+  - API writes `Job` and `OutboxMessage` in one transaction
+- Inbox
+  - consumer-side idempotency and claim tracking
+- Retry / DLQ
+  - transient failures are retried; terminal failures land in dead-letter handling
+- Stale recovery
+  - long-running stuck processing states can be replayed safely
 
-- 一个带真实异步链、可靠性模式和云上 testbed 的全栈样板项目
-- 一个能够展示应用开发、云部署、CI/CD、运行时配置管理的工程化项目
+## Cloud Runtime Model
 
-## 后续可以继续增强的方向
+### Testbed
 
-- Key Vault 完整收口
-- Production 环境
-- Terraform
-- Observability / Dashboard / Alerts
+- Azure Container Apps:
+  - `web`
+  - `api`
+  - `worker`
+  - `notification-service`
+- Azure SQL Database
+- Azure Blob Storage
+- Azure Service Bus
+- Azure Key Vault
+- managed identities
+
+### Production
+
+- same runtime shape as testbed
+- validated image tags are promoted from testbed
+- runtime secrets come from Key Vault through managed identity

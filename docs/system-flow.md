@@ -1,17 +1,27 @@
-# 系统流程图
+# System Flow
 
-这份文档描述当前 `DocFlowCloud` 在两种环境下的真实消息链：
+This document describes the current end-to-end async flow in `DocFlowCloud`.
 
-- **本地 Development**：继续使用 RabbitMQ，方便调试和断点
-- **云上 Testbed**：使用 Azure Service Bus，走真实云消息基础设施
+## Environment Split
 
-## 当前云上主链
+- local `Development`
+  - RabbitMQ
+  - local storage
+- cloud `Testbed`
+  - Azure Service Bus
+  - Azure Blob
+  - Azure Container Apps
+- cloud `Production`
+  - same runtime shape as testbed
+  - promotes validated image tags
+
+## Cloud Main Flow
 
 ```mermaid
 flowchart TD
-    A[前端上传文件] --> B[POST /api/jobs/document-to-pdf]
+    A[Frontend uploads file] --> B[POST /api/jobs/document-to-pdf]
     B --> C[JobService.CreateDocumentToPdfAsync]
-    C --> D[保存原文件到 Azure Blob]
+    C --> D[Save source file to Azure Blob]
     C --> E[(Jobs)]
     C --> F[(OutboxMessages)]
     F --> G[OutboxPublisherWorker]
@@ -24,81 +34,66 @@ flowchart TD
     K --> N[ServiceBusJobStatusUpdatesConsumer]
     L --> O[(InboxMessages)]
     L --> P[JobSideEffectExecutor]
-    P --> Q[保存结果 PDF 到 Azure Blob]
+    P --> Q[Save result PDF to Azure Blob]
     L --> E
     N --> R[SignalR Hub]
-    R --> S[前端实时刷新状态]
+    R --> S[Frontend realtime refresh]
 ```
 
-## 从上传到处理完成
+## End-to-End Processing
 
-1. 前端上传一个图片、txt、md 或 html 文件。
-2. API 调用 `JobService.CreateDocumentToPdfAsync(...)`。
-3. `JobService` 先把原文件写入存储层，拿到 `InputStorageKey`。
-4. `JobService` 在同一个数据库事务里写入：
-   - 一条 `Job`
-   - 一条 `OutboxMessage`
-5. `OutboxPublisherWorker` 扫描未发布 Outbox，把 `job.created` 发到 Azure Service Bus Topic `job-events`。
-6. `worker` subscription 被 `DocFlowCloud.Worker` 消费。
-7. `notification` subscription 被 `DocFlowCloud.NotificationService` 消费。
-8. Worker 从 Azure Blob 读取原文件，执行文档转 PDF。
-9. Worker 把生成好的 PDF 保存回 Azure Blob，并更新数据库中的 `Job` / `InboxMessage`。
-10. Worker 发布 `job.status.changed` 到同一个 Topic。
-11. `api-realtime` subscription 被 API 里的 `ServiceBusJobStatusUpdatesConsumer` 消费。
-12. API 通过 SignalR 把 `jobUpdated` 推给前端，前端实时更新状态。
+1. The frontend uploads an image, text, markdown, or HTML file.
+2. The API calls `JobService.CreateDocumentToPdfAsync(...)`.
+3. The source file is written to the configured storage provider.
+4. The API writes both:
+   - a `Job`
+   - an `OutboxMessage`
+5. `OutboxPublisherWorker` publishes `job.created` to the `job-events` topic.
+6. The `worker` subscription is consumed by `DocFlowCloud.Worker`.
+7. The `notification` subscription is consumed by `DocFlowCloud.NotificationService`.
+8. The worker loads the source file and performs the conversion.
+9. The worker saves the generated PDF and updates `Job` + `InboxMessage`.
+10. The worker publishes `job.status.changed`.
+11. The `api-realtime` subscription is consumed by the API realtime consumer.
+12. The API sends `jobUpdated` through SignalR so the browser refreshes status.
 
-## Worker 消费流程
+## Worker Consumption Flow
 
 ```mermaid
 flowchart TD
-    A[收到 job.created] --> B[TryClaimAsync for Worker]
-    B -->|Claim 失败| C[跳过重复消费]
-    B -->|Claim 成功| D{Job 是否已完成?}
-    D -->|是| E[只更新 Inbox=Processed]
-    D -->|否| F[从 Azure Blob 读取原文件]
-    F --> G[执行文档转 PDF]
-    G --> H[保存结果 PDF 到 Azure Blob]
-    H --> I[提交事务更新 Job 和 Inbox]
-    I --> J[发布 job.status.changed]
+    A[Receive job.created] --> B[TryClaimAsync for Worker]
+    B -->|Claim failed| C[Skip duplicate processing]
+    B -->|Claim succeeded| D{Job already done?}
+    D -->|Yes| E[Mark inbox processed]
+    D -->|No| F[Read source file]
+    F --> G[Convert document to PDF]
+    G --> H[Save result PDF]
+    H --> I[Commit Job and Inbox]
+    I --> J[Publish job.status.changed]
 ```
 
-## Notification Service 流程
+## Failure and Recovery
 
 ```mermaid
 flowchart TD
-    A[收到 job.created] --> B[TryClaimAsync for Notification]
-    B -->|Claim 失败| C[跳过重复消费]
-    B -->|Claim 成功| D[执行通知逻辑]
-    D --> E[Inbox 标记为 Processed]
+    A[Worker processing fails] --> B{Retryable?}
+    B -->|Yes| C[Abandon / retry path]
+    B -->|No| D[Dead-letter path]
+    E[StaleInboxRecoveryWorker] --> F[Find long-running stuck inbox items]
+    F --> G[Recover job state]
+    G --> H[Write replay outbox message]
+    H --> I[OutboxPublisherWorker republishes]
 ```
 
-## 失败与恢复
+## Promotion Flow
 
 ```mermaid
-flowchart TD
-    A[Worker 处理异常] --> B{可重试吗?}
-    B -->|是| C[Abandon 消息]
-    C --> D[Service Bus 重新投递]
-    B -->|否| E[Dead-letter 到 DLQ]
-    F[StaleInboxRecoveryWorker] --> G[扫描长期卡在 Processing 的 Inbox]
-    G --> H[恢复 Job 状态]
-    H --> I[写入新的 OutboxMessage]
-    I --> J[OutboxPublisherWorker 重新发消息]
+flowchart LR
+    A[Push to test] --> B[CI + build + push images]
+    B --> C[Testbed deploy]
+    C --> D[Validate cloud runtime]
+    D --> E[Manual promote by image tag]
+    E --> F[Run prod migrator if migrations changed]
+    F --> G[Update prod apps]
+    G --> H[Rollback by re-promoting an older validated tag]
 ```
-
-## 环境差异
-
-### 本地 Development
-
-- SQL Server：本地 Docker
-- 消息系统：RabbitMQ
-- 文件存储：Local
-- 目的：快速调试、断点、低成本开发
-
-### 云上 Testbed
-
-- Azure SQL Database
-- Azure Service Bus
-- Azure Blob Storage
-- Azure Container Apps
-- 目的：验证完整云上交付链和真实运行环境
