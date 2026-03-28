@@ -41,6 +41,11 @@ on:
         required: false
         default: ""
         type: string
+      custom_image_tag:
+        description: "Optional extra image tag when manually building testbed images from the test branch"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -69,10 +74,14 @@ jobs:
   # - unit / integration tests
   # - frontend tests
   # - frontend build
+  #
+  # 额外说明：
+  # - test 分支 push：自动跑
+  # - test 分支 workflow_dispatch：也允许手动跑，便于配合 custom_image_tag 产出额外 tag
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/test'
 
     steps:
       - name: Checkout repository
@@ -151,6 +160,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Compute image tags
+        id: image-tags
+        shell: bash
+        run: |
+          echo "full_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -164,7 +180,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image_name }}
           tags: |
-            type=raw,value=${{ github.sha }}
+            type=raw,value=${{ steps.image-tags.outputs.full_sha }}
+            type=raw,value=${{ steps.image-tags.outputs.short_sha }}
+            type=raw,value=${{ inputs.custom_image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/test' && inputs.custom_image_tag != '' }}
             type=raw,value=testbed-latest
 
       - name: Build and push image
@@ -188,6 +206,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Compute image tags
+        id: image-tags
+        shell: bash
+        run: |
+          echo "full_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -201,7 +226,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web
           tags: |
-            type=raw,value=${{ github.sha }}
+            type=raw,value=${{ steps.image-tags.outputs.full_sha }}
+            type=raw,value=${{ steps.image-tags.outputs.short_sha }}
+            type=raw,value=${{ inputs.custom_image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/test' && inputs.custom_image_tag != '' }}
             type=raw,value=testbed-latest
 
       - name: Build and push web image
@@ -279,7 +306,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           MIGRATOR_JOB_NAME: docflow-migrator-testbed
-          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.sha }}
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
         run: |
           if az containerapp job show --name "$MIGRATOR_JOB_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp job update \
@@ -412,7 +439,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
-          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.sha }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
@@ -472,7 +499,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           WEB_APP_NAME: ${{ vars.TESTBED_WEB_APP_NAME }}
-          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.sha }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           API_BASE_URL: ${{ vars.TESTBED_API_BASE_URL }}
         run: |
           if az containerapp show --name "$WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
@@ -502,7 +529,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           WORKER_APP_NAME: docflow-worker-testbed
-          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.sha }}
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
@@ -552,7 +579,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           NOTIFICATION_APP_NAME: docflow-notification-testbed
-          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.sha }}
+          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
