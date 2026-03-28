@@ -5,6 +5,7 @@ using DocFlowCloud.Api.Validators;
 using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Infrastructure;
+using DocFlowCloud.Infrastructure.Messaging;
 using DocFlowCloud.Infrastructure.Persistence;
 using FluentValidation;
 using FluentValidation.AspNetCore;
@@ -14,6 +15,7 @@ const string FrontendCorsPolicy = "FrontendCorsPolicy";
 
 // API 进程入口：
 // 负责组装 HTTP API、SignalR、日志、中间件、基础设施依赖和实时消息消费者。
+// 当前在原有结构上补充了按 Messaging.Provider 在 RabbitMQ 和 Service Bus 之间切换实时消费者的能力。
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate:
@@ -69,9 +71,27 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<JobService>();
 
-// 这个后台消费者负责订阅 RabbitMQ 上的 job.status.changed 事件，
+// 这个后台消费者负责订阅状态变化事件，
 // 再把状态变化转成 SignalR 推送给前端。
-builder.Services.AddHostedService<JobStatusUpdatesConsumer>();
+// 当前先保留总开关，再按 Messaging.Provider 决定启动 RabbitMQ 版还是 Service Bus 版消费者。
+var enableJobStatusConsumer =
+    builder.Configuration.GetValue("Realtime:EnableJobStatusConsumer", true);
+
+var messagingSettings = builder.Configuration
+    .GetSection(MessagingSettings.SectionName)
+    .Get<MessagingSettings>() ?? new MessagingSettings();
+
+if (enableJobStatusConsumer)
+{
+    if (string.Equals(messagingSettings.Provider, "ServiceBus", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddHostedService<ServiceBusJobStatusUpdatesConsumer>();
+    }
+    else
+    {
+        builder.Services.AddHostedService<JobStatusUpdatesConsumer>();
+    }
+}
 
 var app = builder.Build();
 

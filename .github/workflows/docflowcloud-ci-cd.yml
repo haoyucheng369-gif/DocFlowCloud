@@ -1,0 +1,894 @@
+﻿name: DocFlowCloud CI/CD
+
+# ============================================================
+# 文档说明：
+# 1. test 分支：
+#    - 跑 CI
+#    - 构建并推送镜像
+#    - 自动迁移 testbed 数据库
+#    - 部署 web / api / worker / notification-service 到 Azure testbed
+#
+# 2. production promote：
+#    - 不再依赖 master push 自动跑 CI
+#    - 通过 workflow_dispatch 手动 promote 已验证镜像
+#
+# 3. 当前 secret 策略：
+#    - GitHub 只保留 Azure 部署身份和非敏感环境变量
+#    - 应用运行时 secret 由 ACA + Managed Identity + Key Vault 提供
+# ============================================================
+
+on:
+  # test branch:
+  # - run CI
+  # - build and push images
+  # - deploy to testbed
+  #
+  # production:
+  # - no automatic deploy from master push
+  # - promote a previously validated image tag manually
+  push:
+    branches:
+      - test
+
+  # Pull requests only run CI checks.
+  pull_request:
+
+  # Production promotion is manual and uses a validated image tag from GHCR.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing GHCR image tag to deploy to production"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  # ------------------------------------------------------------
+  # 全局构建参数
+  # - .NET / Node 版本
+  # - GHCR registry 命名空间
+  # ------------------------------------------------------------
+  DOTNET_VERSION: 10.0.x
+  NODE_VERSION: 20
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+
+jobs:
+  # ------------------------------------------------------------
+  # 1. 通用 CI
+  # ------------------------------------------------------------
+  # 所有 PR / test 都会先跑这一段。
+  # 这里只做代码质量校验，不做云部署：
+  # - restore
+  # - build
+  # - unit / integration tests
+  # - frontend tests
+  # - frontend build
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/DocFlowCloud.Web/package-lock.json
+
+      - name: Restore .NET dependencies
+        run: dotnet restore DocFlowCloud.sln
+
+      - name: Build .NET solution
+        run: dotnet build DocFlowCloud.sln --configuration Release --no-restore
+
+      - name: Run unit tests
+        run: dotnet test tests/DocFlowCloud.UnitTests/DocFlowCloud.UnitTests.csproj --configuration Release --no-build
+
+      - name: Run integration tests
+        run: dotnet test tests/DocFlowCloud.IntegrationTests/DocFlowCloud.IntegrationTests.csproj --configuration Release --no-build
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: src/DocFlowCloud.Web
+
+      - name: Run frontend tests
+        run: npm test
+        working-directory: src/DocFlowCloud.Web
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: src/DocFlowCloud.Web
+
+  # ------------------------------------------------------------
+  # 2. 构建并推送镜像
+  # ------------------------------------------------------------
+  # 只有 test 分支会产出可部署镜像。
+  # 这些镜像先在 testbed 被验证，通过后才能继续考虑 production promote。
+  build-and-push-backend-images:
+    name: Build and push backend images
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    environment: testbed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image_name: docflowcloud-api
+            dockerfile: src/DocFlowCloud.Api/Dockerfile
+            context: .
+            build_args: ""
+          - image_name: docflowcloud-worker
+            dockerfile: src/DocFlowCloud.Worker/Dockerfile
+            context: .
+            build_args: ""
+          - image_name: docflowcloud-notification-service
+            dockerfile: src/DocFlowCloud.NotificationService/Dockerfile
+            context: .
+            build_args: ""
+          - image_name: docflowcloud-migrator
+            dockerfile: src/DocFlowCloud.Api/Dockerfile.migrator
+            context: .
+            build_args: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image_name }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=testbed-latest
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+
+  build-and-push-web-image:
+    name: Build and push web image
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    environment: testbed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=testbed-latest
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/DocFlowCloud.Web/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_APP_ENV=testbed
+
+  # ------------------------------------------------------------
+  # 3. testbed 数据库迁移
+  # ------------------------------------------------------------
+  # API / worker 启动前必须先保证 Azure SQL schema 已经到位。
+  # 这里复用 migrator 镜像，在 Azure Container Apps Job 里执行一次性迁移。
+  #
+  # 额外优化：
+  # - 只有 Infrastructure/Migrations 目录有变动时才真正跑 migrator
+  # - 否则直接跳过，避免每次部署都等待数分钟
+  run-testbed-migrator:
+    name: Run testbed migrator
+    runs-on: ubuntu-latest
+    needs: build-and-push-backend-images
+    environment: testbed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect database migration changes
+        id: db-change-check
+        shell: bash
+        run: |
+          BEFORE_SHA="${{ github.event.before }}"
+          CURRENT_SHA="${{ github.sha }}"
+
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "No previous commit available; migrator will run."
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -E '^src/DocFlowCloud\.Infrastructure/Migrations/' > /dev/null; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "Database migration files changed; migrator will run."
+          else
+            echo "run_migrator=false" >> "$GITHUB_OUTPUT"
+            echo "No migration files changed; migrator will be skipped."
+          fi
+
+      - name: Azure login
+        if: steps.db-change-check.outputs.run_migrator == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Azure Container Apps extension is available
+        if: steps.db-change-check.outputs.run_migrator == 'true'
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Create or update testbed migrator job
+        if: steps.db-change-check.outputs.run_migrator == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          MIGRATOR_JOB_NAME: docflow-migrator-testbed
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.sha }}
+        run: |
+          if az containerapp job show --name "$MIGRATOR_JOB_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp job update \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$MIGRATOR_IMAGE" \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed
+          else
+            az containerapp job create \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --trigger-type Manual \
+              --replica-timeout 1800 \
+              --replica-retry-limit 1 \
+              --replica-completion-count 1 \
+              --parallelism 1 \
+              --cpu 0.25 \
+              --memory 0.5Gi \
+              --image "$MIGRATOR_IMAGE" \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed
+          fi
+
+      - name: Start testbed migrator job and wait for completion
+        if: steps.db-change-check.outputs.run_migrator == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          MIGRATOR_JOB_NAME: docflow-migrator-testbed
+        run: |
+          EXECUTION_NAME=$(az containerapp job start \
+            --name "$MIGRATOR_JOB_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query name -o tsv)
+
+          echo "Started migrator execution: $EXECUTION_NAME"
+
+          for i in $(seq 1 60); do
+            STATUS=$(az containerapp job execution show \
+              --name "$MIGRATOR_JOB_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$EXECUTION_NAME" \
+              --query properties.status -o tsv)
+
+            echo "Migrator execution status: $STATUS"
+
+            if [ "$STATUS" = "Succeeded" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Canceled" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "Migrator execution did not complete successfully."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for migrator execution to complete."
+          exit 1
+
+      - name: Skip testbed migrator
+        if: steps.db-change-check.outputs.run_migrator != 'true'
+        run: |
+          echo "No EF migration files changed in this push."
+          echo "Skipping testbed migrator to keep deployment fast."
+
+  # ------------------------------------------------------------
+  # 4. 部署到 Azure testbed
+  # ------------------------------------------------------------
+  # 当前 testbed 已经包含完整云上主链：
+  # - web
+  # - api
+  # - worker
+  # - notification-service
+  #
+  # 当前 testbed 运行时基础设施：
+  # - Azure SQL
+  # - Azure Blob
+  # - Azure Service Bus
+  # - Key Vault + Managed Identity
+  #
+  # 这里 workflow 只负责：
+  # - 部署镜像
+  # - 注入非敏感环境变量
+  #
+  # 运行时 secret 不再由 GitHub 明文中转。
+  deploy-testbed:
+    name: Deploy to testbed
+    runs-on: ubuntu-latest
+    needs:
+      - build-and-push-backend-images
+      - build-and-push-web-image
+      - run-testbed-migrator
+    environment: testbed
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/test'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect Azure testbed deployment readiness
+        id: testbed-ready
+        run: |
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -z "${{ secrets.AZURE_TENANT_ID }}" ] || [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Azure deployment secrets are missing for the testbed environment."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Azure login
+        if: steps.testbed-ready.outputs.ready == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Azure Container Apps extension is available
+        if: steps.testbed-ready.outputs.ready == 'true'
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Deploy API to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.sha }}
+          BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          if az containerapp show --name "$API_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$API_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$API_IMAGE" \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                Realtime__EnableJobStatusConsumer=true \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          else
+            az containerapp create \
+              --name "$API_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$API_IMAGE" \
+              --ingress external \
+              --target-port 8080 \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                Realtime__EnableJobStatusConsumer=true \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          fi
+
+      - name: Capture testbed API URL
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
+        run: |
+          API_FQDN=$(az containerapp show --name "$API_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Testbed API URL: https://$API_FQDN"
+          echo "Update TESTBED_API_BASE_URL in GitHub testbed environment to this value, then push test again so the web image is rebuilt against the real API URL."
+
+      - name: Deploy Web to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          WEB_APP_NAME: ${{ vars.TESTBED_WEB_APP_NAME }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.sha }}
+          API_BASE_URL: ${{ vars.TESTBED_API_BASE_URL }}
+        run: |
+          if az containerapp show --name "$WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$WEB_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$WEB_IMAGE" \
+              --set-env-vars \
+                RUNTIME_API_BASE_URL="$API_BASE_URL" \
+                RUNTIME_APP_ENV=testbed
+          else
+            az containerapp create \
+              --name "$WEB_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$WEB_IMAGE" \
+              --ingress external \
+              --target-port 80 \
+              --env-vars \
+                RUNTIME_API_BASE_URL="$API_BASE_URL" \
+                RUNTIME_APP_ENV=testbed
+          fi
+
+      - name: Deploy Worker to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          WORKER_APP_NAME: docflow-worker-testbed
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.sha }}
+          BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          if az containerapp show --name "$WORKER_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$WORKER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$WORKER_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          else
+            az containerapp create \
+              --name "$WORKER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$WORKER_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          fi
+
+      - name: Deploy NotificationService to Azure Container Apps
+        if: steps.testbed-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
+          CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
+          NOTIFICATION_APP_NAME: docflow-notification-testbed
+          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.sha }}
+          BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          if az containerapp show --name "$NOTIFICATION_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            az containerapp update \
+              --name "$NOTIFICATION_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$NOTIFICATION_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --set-env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          else
+            az containerapp create \
+              --name "$NOTIFICATION_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --environment "$CONTAINER_APPS_ENV" \
+              --image "$NOTIFICATION_IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 1 \
+              --env-vars \
+                ASPNETCORE_ENVIRONMENT=Testbed \
+                DOTNET_ENVIRONMENT=Testbed \
+                Messaging__Provider=ServiceBus \
+                Storage__Provider=AzureBlob \
+                Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+                ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+                ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+                ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+                ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+          fi
+
+      - name: Summarize first testbed deployment scope
+        if: steps.testbed-ready.outputs.ready == 'true'
+        run: |
+          echo "Current first-pass cloud deployment scope:"
+          echo "- web: deployed"
+          echo "- api: deployed"
+          echo "- worker: deployed"
+          echo "- notification-service: deployed"
+          echo "- API realtime consumer: Azure Service Bus"
+          echo "- worker messaging provider: Azure Service Bus"
+          echo "- notification messaging provider: Azure Service Bus"
+          echo "- API database: Azure SQL"
+          echo "- API storage: Azure Blob"
+
+      - name: Testbed deployment skipped
+        if: steps.testbed-ready.outputs.ready != 'true'
+        run: |
+          echo "Testbed deployment was skipped because Azure secrets are not configured yet."
+          echo "CI and GHCR image publication still succeeded."
+
+  # ------------------------------------------------------------
+  # 5. production promote
+  # ------------------------------------------------------------
+  # production 复用已经在 testbed 验证通过的 image tag。
+  # workflow 不重新 build，只负责：
+  # - 按需运行 prod migrator
+  # - 更新 prod api / web / worker / notification-service 镜像
+  # - 注入非敏感配置
+  #
+  # 运行时 secret 继续由 ACA secret reference + Managed Identity + Key Vault 提供。
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && inputs.image_tag != ''
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Azure production deployment readiness
+        id: production-ready
+        run: |
+          if [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -z "${{ secrets.AZURE_TENANT_ID }}" ] || [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Azure deployment secrets are missing for the production environment."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect production database migration changes
+        id: prod-db-change-check
+        if: steps.production-ready.outputs.ready == 'true'
+        shell: bash
+        run: |
+          CURRENT_SHA=$(git rev-parse HEAD)
+          PREVIOUS_SHA=$(git rev-parse HEAD^ 2>/dev/null || echo "")
+
+          if [ -z "$PREVIOUS_SHA" ]; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "No previous commit available on master; prod migrator will run."
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$PREVIOUS_SHA" "$CURRENT_SHA")
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -E '^src/DocFlowCloud\.Infrastructure/Migrations/' > /dev/null; then
+            echo "run_migrator=true" >> "$GITHUB_OUTPUT"
+            echo "Database migration files changed; prod migrator will run."
+          else
+            echo "run_migrator=false" >> "$GITHUB_OUTPUT"
+            echo "No migration files changed; prod migrator will be skipped."
+          fi
+
+      - name: Azure login
+        if: steps.production-ready.outputs.ready == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure Azure Container Apps extension is available
+        if: steps.production-ready.outputs.ready == 'true'
+        run: az extension add --name containerapp --upgrade --yes
+
+      - name: Validate production bootstrap resources
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+        run: |
+          for resource_name in \
+            docflow-api-prod \
+            docflow-web-prod \
+            docflow-worker-prod \
+            docflow-notification-prod
+          do
+            if ! az containerapp show --name "$resource_name" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+              echo "Required production container app '$resource_name' was not found."
+              echo "Production bootstrap must be completed in Azure before workflow promotion can manage images."
+              exit 1
+            fi
+          done
+
+          if ! az containerapp job show --name docflow-migrator-prod --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
+            echo "Required production migrator job 'docflow-migrator-prod' was not found."
+            exit 1
+          fi
+
+      - name: Update production migrator job
+        if: steps.production-ready.outputs.ready == 'true' && steps.prod-db-change-check.outputs.run_migrator == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ inputs.image_tag }}
+        run: |
+          az containerapp job update \
+            --name docflow-migrator-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$MIGRATOR_IMAGE" \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production
+
+      - name: Run production migrator and wait for completion
+        if: steps.production-ready.outputs.ready == 'true' && steps.prod-db-change-check.outputs.run_migrator == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+        run: |
+          EXECUTION_NAME=$(az containerapp job start \
+            --name docflow-migrator-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --query name -o tsv)
+
+          echo "Started production migrator execution: $EXECUTION_NAME"
+
+          for i in $(seq 1 60); do
+            STATUS=$(az containerapp job execution show \
+              --name docflow-migrator-prod \
+              --resource-group "$RESOURCE_GROUP" \
+              --job-execution-name "$EXECUTION_NAME" \
+              --query properties.status -o tsv)
+
+            echo "Production migrator execution status: $STATUS"
+
+            if [ "$STATUS" = "Succeeded" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Canceled" ] || [ "$STATUS" = "Cancelled" ]; then
+              echo "Production migrator execution did not complete successfully."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for production migrator execution to complete."
+          exit 1
+
+      - name: Skip production migrator
+        if: steps.production-ready.outputs.ready == 'true' && steps.prod-db-change-check.outputs.run_migrator != 'true'
+        run: |
+          echo "No EF migration files changed on master."
+          echo "Skipping production migrator for this promote."
+
+      - name: Deploy API to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ inputs.image_tag }}
+          BLOB_CONTAINER_NAME: ${{ vars.PROD_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.PROD_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          az containerapp update \
+            --name docflow-api-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$API_IMAGE" \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production \
+              Messaging__Provider=ServiceBus \
+              Realtime__EnableJobStatusConsumer=true \
+              Storage__Provider=AzureBlob \
+              Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+              ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+              ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+              ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+              ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+
+      - name: Capture production API URL
+        if: steps.production-ready.outputs.ready == 'true'
+        id: prod-api-url
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+        run: |
+          API_FQDN=$(az containerapp show \
+            --name docflow-api-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "url=https://$API_FQDN" >> "$GITHUB_OUTPUT"
+          echo "Production API URL: https://$API_FQDN"
+
+      - name: Deploy Web to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ inputs.image_tag }}
+          API_BASE_URL: ${{ steps.prod-api-url.outputs.url }}
+        run: |
+          az containerapp update \
+            --name docflow-web-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$WEB_IMAGE" \
+            --set-env-vars \
+              RUNTIME_API_BASE_URL="$API_BASE_URL" \
+              RUNTIME_APP_ENV=production
+
+      - name: Deploy Worker to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ inputs.image_tag }}
+          BLOB_CONTAINER_NAME: ${{ vars.PROD_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.PROD_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          az containerapp update \
+            --name docflow-worker-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$WORKER_IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production \
+              Messaging__Provider=ServiceBus \
+              Storage__Provider=AzureBlob \
+              Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+              ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+              ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+              ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+              ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+
+      - name: Deploy NotificationService to production
+        if: steps.production-ready.outputs.ready == 'true'
+        env:
+          RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
+          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ inputs.image_tag }}
+          BLOB_CONTAINER_NAME: ${{ vars.PROD_BLOB_CONTAINER_NAME }}
+          SERVICEBUS_TOPIC_NAME: ${{ vars.PROD_SERVICEBUS_TOPIC_NAME }}
+          SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_WORKER_SUBSCRIPTION }}
+          SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
+          SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
+        run: |
+          az containerapp update \
+            --name docflow-notification-prod \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$NOTIFICATION_IMAGE" \
+            --min-replicas 1 \
+            --max-replicas 1 \
+            --set-env-vars \
+              ASPNETCORE_ENVIRONMENT=Production \
+              DOTNET_ENVIRONMENT=Production \
+              Messaging__Provider=ServiceBus \
+              Storage__Provider=AzureBlob \
+              Storage__AzureBlob__ContainerName="$BLOB_CONTAINER_NAME" \
+              ServiceBus__TopicName="$SERVICEBUS_TOPIC_NAME" \
+              ServiceBus__WorkerSubscriptionName="$SERVICEBUS_WORKER_SUBSCRIPTION" \
+              ServiceBus__NotificationSubscriptionName="$SERVICEBUS_NOTIFICATION_SUBSCRIPTION" \
+              ServiceBus__ApiRealtimeSubscriptionName="$SERVICEBUS_API_REALTIME_SUBSCRIPTION"
+
+      - name: Summarize production promotion
+        if: steps.production-ready.outputs.ready == 'true'
+        run: |
+          echo "Production promotion completed with image tag: ${{ inputs.image_tag }}"
+          echo "- prod migrator: conditional"
+          echo "- prod api: updated"
+          echo "- prod web: updated"
+          echo "- prod worker: updated"
+          echo "- prod notification-service: updated"
+          echo "- runtime secrets continue to come from ACA secret references and Key Vault"
+
+      - name: Production deployment skipped
+        if: steps.production-ready.outputs.ready != 'true'
+        run: |
+          echo "Production deployment was skipped because Azure secrets are not configured yet."
+          echo "When Azure is ready, rerun workflow_dispatch from master with a validated image tag."
+

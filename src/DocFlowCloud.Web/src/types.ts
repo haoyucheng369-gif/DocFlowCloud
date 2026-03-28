@@ -22,7 +22,7 @@ export type SystemEnvironment = {
   apiEnvironment: string;
   databaseServer: string;
   databaseName: string;
-  rabbitMqHost: string;
-  rabbitMqVirtualHost: string;
+  messagingProvider: string;
+  messagingTarget: string;
   storageProvider: string;
 };

@@ -4,11 +4,13 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { ToastProvider } from "./components/ToastProvider";
+import { getRuntimeAppEnvironment } from "./lib/runtimeConfig";
 import { queryClient } from "./lib/queryClient";
 import "./styles.css";
 
-// 启动时按环境补齐浏览器标题，方便同时开多个环境页面时快速区分。
-const appEnv = import.meta.env.VITE_APP_ENV?.toString()?.trim() || "testbed";
+// Use the runtime environment label in the browser title so cloud deployments
+// can switch environments without rebuilding the frontend image.
+const appEnv = getRuntimeAppEnvironment();
 document.title = `DocFlowCloud - ${appEnv}`;
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

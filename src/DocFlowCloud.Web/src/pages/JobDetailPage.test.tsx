@@ -5,6 +5,10 @@ import { JobDetailPage } from "./JobDetailPage";
 import { renderWithProviders } from "../test/render";
 import * as api from "../lib/api";
 
+vi.mock("../lib/signalr", () => ({
+  subscribeToJobUpdates: vi.fn().mockResolvedValue(() => {})
+}));
+
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {

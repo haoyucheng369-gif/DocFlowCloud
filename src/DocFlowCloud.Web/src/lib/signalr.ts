@@ -4,9 +4,9 @@ import {
   HubConnectionState,
   LogLevel
 } from "@microsoft/signalr";
+import { getRuntimeApiBaseUrl } from "./runtimeConfig";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.toString() ?? "http://localhost:8080";
+const API_BASE_URL = getRuntimeApiBaseUrl();
 
 type JobUpdatedPayload = {
   jobId: string;

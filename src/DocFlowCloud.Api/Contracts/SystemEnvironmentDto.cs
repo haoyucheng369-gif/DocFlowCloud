@@ -10,9 +10,9 @@ public sealed class SystemEnvironmentDto
 
     public string DatabaseName { get; init; } = string.Empty;
 
-    public string RabbitMqHost { get; init; } = string.Empty;
+    public string MessagingProvider { get; init; } = string.Empty;
 
-    public string RabbitMqVirtualHost { get; init; } = string.Empty;
+    public string MessagingTarget { get; init; } = string.Empty;
 
     public string StorageProvider { get; init; } = string.Empty;
 }

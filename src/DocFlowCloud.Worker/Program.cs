@@ -1,12 +1,15 @@
 using DocFlowCloud.Application.Abstractions.Processing;
 using DocFlowCloud.Infrastructure;
+using DocFlowCloud.Infrastructure.Messaging;
 using DocFlowCloud.Worker;
 using Microsoft.Extensions.Hosting;
 using QuestPDF.Infrastructure;
 using Serilog;
 
 // Worker 进程入口：
-// 负责启动发送侧、消费侧和卡死恢复这几个后台服务。
+// 当前开始支持“本地 RabbitMQ / testbed ServiceBus”双 provider。
+// 先保留 OutboxPublisherWorker 和 StaleInboxRecoveryWorker，
+// 再按 Messaging.Provider 决定到底启动 RabbitMqWorker 还是 ServiceBusWorker。
 QuestPDF.Settings.License = LicenseType.Community;
 
 Log.Logger = new LoggerConfiguration()
@@ -22,19 +25,28 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// 注册基础设施和真正的副作用执行器。
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IJobSideEffectExecutor, JobSideEffectExecutor>();
 
-// 三个后台服务：
-// 1. OutboxPublisherWorker 扫描并发布消息
-// 2. RabbitMqWorker 消费并处理任务
-// 3. StaleInboxRecoveryWorker 自动接管卡死消息
-builder.Services.AddHostedService<OutboxPublisherWorker>();
-builder.Services.AddHostedService<RabbitMqWorker>();
-builder.Services.AddHostedService<StaleInboxRecoveryWorker>();
+var messagingSettings = builder.Configuration
+    .GetSection(MessagingSettings.SectionName)
+    .Get<MessagingSettings>() ?? new MessagingSettings();
 
-// 统一使用 Serilog 输出控制台和文件日志。
+builder.Services.AddHostedService<OutboxPublisherWorker>();
+
+// 这里是 worker 消费端的切换点：
+// - Development 继续 RabbitMqWorker，方便本地调试
+// - Testbed / Production 切 ServiceBusWorker，走云上消息总线
+if (string.Equals(messagingSettings.Provider, "ServiceBus", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHostedService<ServiceBusWorker>();
+}
+else
+{
+    builder.Services.AddHostedService<RabbitMqWorker>();
+}
+
+builder.Services.AddHostedService<StaleInboxRecoveryWorker>();
 builder.Services.AddSerilog();
 
 var host = builder.Build();

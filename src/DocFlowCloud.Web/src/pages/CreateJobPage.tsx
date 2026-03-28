@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 import { useToast } from "../components/ToastProvider";
 import { createDocumentToPdf } from "../lib/api";
+import { InfoTabsPanel, type InfoTab } from "./create-job/InfoTabsPanel";
 
 const createJobSchema = z.object({
   name: z.string().max(120, "Task name is too long.").optional(),
@@ -21,6 +22,7 @@ export function CreateJobPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const [isDragging, setIsDragging] = useState(false);
+  const [activeInfoTab, setActiveInfoTab] = useState<InfoTab>("overview");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
@@ -105,151 +107,13 @@ export function CreateJobPage() {
         ? `Selected: ${selectedFiles[0].name}`
         : `${selectedFiles.length} files selected`;
 
-  const stackGroups = [
-    {
-      title: "Frontend",
-      items: ["React", "TypeScript", "Tailwind", "TanStack Query", "SignalR"]
-    },
-    {
-      title: "Backend",
-      items: ["ASP.NET Core", "RabbitMQ", "Outbox / Inbox", "Retry / DLQ", "Local / Blob Storage"]
-    },
-    {
-      title: "Delivery",
-      items: ["Docker Compose", "Testbed / Production", "Health Checks", "Unit + Integration Tests"]
-    }
-  ];
-
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.35fr_0.85fr]">
-      <section className="space-y-6">
-        <div className="rounded-3xl border border-line bg-white p-8 shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent">
-            Document To PDF System
-          </p>
-          <div className="mt-4 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-            <div className="space-y-4">
-              <h1 className="max-w-2xl text-3xl font-semibold tracking-tight text-ink">
-                Asynchronous document conversion with queue-driven processing and realtime status updates
-              </h1>
-              <p className="max-w-2xl text-sm leading-7 text-slate-600">
-                This homepage focuses on the system itself: upload a file, persist
-                a job and outbox message, process conversion in the background, and
-                push status updates back to the UI through SignalR.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {["Images", "Plain Text", "Markdown", "Simple HTML", "PDF Output"].map((item) => (
-                  <span
-                    key={item}
-                    className="inline-flex items-center rounded-full bg-soft px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-line"
-                  >
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-soft p-5 ring-1 ring-line">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Quick Summary
-              </p>
-              <dl className="mt-4 space-y-3 text-sm">
-                <div className="flex items-start justify-between gap-4">
-                  <dt className="text-slate-500">Input</dt>
-                  <dd className="text-right font-medium text-slate-800">
-                    File upload with drag & drop or multi-select
-                  </dd>
-                </div>
-                <div className="flex items-start justify-between gap-4">
-                  <dt className="text-slate-500">Execution</dt>
-                  <dd className="text-right font-medium text-slate-800">
-                    API + RabbitMQ + Worker
-                  </dd>
-                </div>
-                <div className="flex items-start justify-between gap-4">
-                  <dt className="text-slate-500">Reliability</dt>
-                  <dd className="text-right font-medium text-slate-800">
-                    Outbox, Inbox, Retry, DLQ, Stale Recovery
-                  </dd>
-                </div>
-                <div className="flex items-start justify-between gap-4">
-                  <dt className="text-slate-500">Storage</dt>
-                  <dd className="text-right font-medium text-slate-800">
-                    Local now, Azure Blob ready
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-          <section className="rounded-3xl border border-line bg-white p-6 shadow-sm">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
-                  Tech Stack
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-ink">
-                  Current building blocks
-                </h2>
-              </div>
-            </div>
-
-            <div className="mt-5 space-y-5">
-              {stackGroups.map((group) => (
-                <section key={group.title}>
-                  <h3 className="text-sm font-semibold text-slate-700">{group.title}</h3>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {group.items.map((item) => (
-                      <span
-                        key={item}
-                        className="inline-flex items-center rounded-full bg-soft px-3 py-1 text-xs font-medium text-slate-700 ring-1 ring-line"
-                      >
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-line bg-white p-6 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
-              Processing Flow
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-ink">
-              From upload to realtime update
-            </h2>
-
-            <div className="mt-5 grid gap-3">
-              {[
-                ["1", "Client Upload", "The browser sends one or more files to the API."],
-                ["2", "Job + Outbox", "The API stores the file, creates the job, and writes the outbox message."],
-                ["3", "Queue Publish", "OutboxPublisherWorker sends the message to RabbitMQ."],
-                ["4", "Worker Execute", "The worker claims the message, converts the file, and stores the PDF result."],
-                ["5", "Status Push", "A status-changed event reaches the API, then SignalR notifies the frontend."]
-              ].map(([step, title, description]) => (
-                <div
-                  key={step}
-                  className="grid grid-cols-[2.25rem_1fr] gap-4 rounded-2xl bg-soft px-4 py-4 ring-1 ring-line"
-                >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-sm font-semibold text-white">
-                    {step}
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-                    <p className="mt-1 text-sm leading-6 text-slate-600">{description}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
+    <div className="grid gap-6 xl:grid-cols-[1.35fr_0.85fr]">
+      <section className="min-w-0 space-y-6">
+        <InfoTabsPanel activeTab={activeInfoTab} onTabChange={setActiveInfoTab} />
       </section>
 
-      <aside className="rounded-3xl border border-line bg-white p-6 shadow-sm lg:sticky lg:top-8 lg:self-start">
+      <aside className="min-w-0 rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-6 xl:sticky xl:top-8 xl:self-start">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
           Create Job
         </p>
@@ -319,11 +183,11 @@ export function CreateJobPage() {
                 }
               }}
             >
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <span className="text-sm text-slate-600">{selectedLabel}</span>
                 <button
                   type="button"
-                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm"
+                  className="self-start rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm sm:self-auto"
                   onClick={(event) => {
                     event.stopPropagation();
                     fileInputRef.current?.click();

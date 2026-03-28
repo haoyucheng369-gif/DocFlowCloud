@@ -1,10 +1,12 @@
 using DocFlowCloud.Infrastructure;
+using DocFlowCloud.Infrastructure.Messaging;
 using DocFlowCloud.NotificationService;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 
 // NotificationService 入口：
-// 它是独立消费者，只负责订阅通知事件并执行通知副作用。
+// 它是独立消费者，只负责订阅通知类事件并执行通知副作用。
+// 当前开始支持按 Messaging.Provider 在 RabbitMQ 和 Service Bus 之间切换。
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate:
@@ -18,12 +20,23 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// 复用同一套 Infrastructure，自己额外注册通知发送器。
+// 复用同一套 Infrastructure，再补充通知发送器。
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<NotificationEmailSender>();
-builder.Services.AddHostedService<NotificationWorker>();
 
-// 统一使用 Serilog 输出日志。
+var messagingSettings = builder.Configuration
+    .GetSection(MessagingSettings.SectionName)
+    .Get<MessagingSettings>() ?? new MessagingSettings();
+
+if (string.Equals(messagingSettings.Provider, "ServiceBus", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHostedService<ServiceBusNotificationWorker>();
+}
+else
+{
+    builder.Services.AddHostedService<NotificationWorker>();
+}
+
 builder.Services.AddSerilog();
 
 var host = builder.Build();

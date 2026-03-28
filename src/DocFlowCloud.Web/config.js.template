@@ -1,0 +1,4 @@
+window.__APP_CONFIG__ = {
+  apiBaseUrl: "${RUNTIME_API_BASE_URL}",
+  appEnvironment: "${RUNTIME_APP_ENV}"
+};

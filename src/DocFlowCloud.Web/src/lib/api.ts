@@ -1,8 +1,8 @@
 import type { CreateJobResponse, Job, SystemEnvironment } from "../types";
+import { getRuntimeApiBaseUrl } from "./runtimeConfig";
 
-// API 调用层：统一封装前端对后端的请求，页面组件只关心业务流程。
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL?.toString() ?? "http://localhost:8080";
+// Centralize frontend API calls so UI code only depends on business actions.
+const API_BASE_URL = getRuntimeApiBaseUrl();
 
 type ProblemDetails = {
   title?: string;
@@ -126,7 +126,7 @@ export async function downloadResultFile(id: string) {
   }
 
   const disposition = response.headers.get("content-disposition") ?? "";
-  const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i);
+  const fileNameMatch = disposition.match(/filename=\"?([^\"]+)\"?/i);
   const fileName = fileNameMatch?.[1] ?? `job-${id}.pdf`;
   const blob = await response.blob();
 
