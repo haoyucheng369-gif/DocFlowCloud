@@ -108,12 +108,12 @@ export function CreateJobPage() {
         : `${selectedFiles.length} files selected`;
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1.35fr_0.85fr]">
-      <section className="space-y-6">
+    <div className="grid gap-6 xl:grid-cols-[1.35fr_0.85fr]">
+      <section className="min-w-0 space-y-6">
         <InfoTabsPanel activeTab={activeInfoTab} onTabChange={setActiveInfoTab} />
       </section>
 
-      <aside className="rounded-3xl border border-line bg-white p-6 shadow-sm lg:sticky lg:top-8 lg:self-start">
+      <aside className="min-w-0 rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-6 xl:sticky xl:top-8 xl:self-start">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
           Create Job
         </p>
@@ -183,11 +183,11 @@ export function CreateJobPage() {
                 }
               }}
             >
-              <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <span className="text-sm text-slate-600">{selectedLabel}</span>
                 <button
                   type="button"
-                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm"
+                  className="self-start rounded-full bg-white px-4 py-2 text-sm font-medium text-ink shadow-sm sm:self-auto"
                   onClick={(event) => {
                     event.stopPropagation();
                     fileInputRef.current?.click();

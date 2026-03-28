@@ -79,7 +79,7 @@ function Panel({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-3xl border border-line bg-white p-6 shadow-sm">
+    <section className="min-w-0 overflow-hidden rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-6">
       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
         {eyebrow}
       </p>
@@ -92,11 +92,11 @@ function Panel({
 function OverviewPanel() {
   return (
     <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-      <div>
+      <div className="min-w-0">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
           Document To PDF System
         </p>
-        <h2 className="mt-2 text-xl font-semibold text-ink">
+        <h2 className="mt-2 max-w-lg break-words text-[1.55rem] font-semibold leading-tight text-ink sm:text-xl">
           Asynchronous document conversion with realtime updates
         </h2>
         <p className="mt-5 max-w-2xl text-sm leading-7 text-slate-600">
@@ -116,32 +116,32 @@ function OverviewPanel() {
         </div>
       </div>
 
-      <div className="rounded-2xl bg-soft p-5 ring-1 ring-line">
+      <div className="min-w-0 rounded-2xl bg-soft p-5 ring-1 ring-line">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
           Quick Summary
         </p>
         <dl className="mt-4 space-y-3 text-sm">
           <div className="flex items-start justify-between gap-4">
             <dt className="text-slate-500">Input</dt>
-            <dd className="text-right font-medium text-slate-800">
+            <dd className="max-w-[10rem] text-right font-medium text-slate-800 sm:max-w-[11rem]">
               Drag, drop, or multi-select
             </dd>
           </div>
           <div className="flex items-start justify-between gap-4">
             <dt className="text-slate-500">Execution</dt>
-            <dd className="text-right font-medium text-slate-800">
+            <dd className="max-w-[10rem] text-right font-medium text-slate-800 sm:max-w-[11rem]">
               API, worker, realtime updates
             </dd>
           </div>
           <div className="flex items-start justify-between gap-4">
             <dt className="text-slate-500">Reliability</dt>
-            <dd className="text-right font-medium text-slate-800">
+            <dd className="max-w-[10rem] text-right font-medium text-slate-800 sm:max-w-[11rem]">
               Outbox, inbox, retry, DLQ
             </dd>
           </div>
           <div className="flex items-start justify-between gap-4">
             <dt className="text-slate-500">Cloud</dt>
-            <dd className="text-right font-medium text-slate-800">
+            <dd className="max-w-[10rem] text-right font-medium text-slate-800 sm:max-w-[11rem]">
               ACA, SQL, Blob, Service Bus, Key Vault
             </dd>
           </div>
@@ -261,10 +261,10 @@ function CloudPanel() {
         {cloudHighlights.map((item) => (
           <div
             key={item.title}
-            className="rounded-2xl bg-soft px-4 py-4 ring-1 ring-line"
+            className="min-w-0 rounded-2xl bg-soft px-4 py-4 ring-1 ring-line"
           >
             <h3 className="text-sm font-semibold text-slate-800">{item.title}</h3>
-            <p className="mt-2 text-sm leading-6 text-slate-600">{item.description}</p>
+            <p className="mt-2 break-words text-sm leading-6 text-slate-600">{item.description}</p>
           </div>
         ))}
       </div>
@@ -280,27 +280,25 @@ export function InfoTabsPanel({
   onTabChange: (tab: InfoTab) => void;
 }) {
   return (
-    <section className="rounded-3xl border border-line bg-white p-8 shadow-sm">
-      <div className="overflow-x-auto">
-        <div className="inline-flex min-w-full gap-1 overflow-hidden rounded-2xl border border-line bg-soft/80 p-1.5">
+    <section className="min-w-0 rounded-3xl border border-line bg-white p-5 shadow-sm sm:p-6 lg:p-8">
+      <div className="grid grid-cols-2 gap-1 rounded-2xl border border-line bg-soft/80 p-1.5 sm:grid-cols-3 lg:grid-cols-5">
           {tabItems.map((tab) => (
             <button
               key={tab.key}
               type="button"
               onClick={() => onTabChange(tab.key)}
               className={[
-                "inline-flex shrink-0 items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold transition",
+                "inline-flex min-w-0 items-center justify-center rounded-xl px-3 py-2.5 text-center text-sm font-semibold leading-snug transition sm:px-4",
                 activeTab === tab.key
                   ? "bg-white text-accent shadow-sm ring-1 ring-accent/15"
                   : "text-slate-600 hover:bg-white/70 hover:text-slate-900"
               ].join(" ")}
-              style={{ minWidth: tab.key === "overview" ? 190 : 132 }}
+              style={undefined}
               aria-pressed={activeTab === tab.key}
             >
               {tab.label}
             </button>
           ))}
-        </div>
       </div>
 
       <div className="mt-6">
