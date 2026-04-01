@@ -10,22 +10,32 @@ using DocFlowCloud.Infrastructure.Persistence;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Serilog;
+using Serilog.Formatting.Compact;
 
 const string FrontendCorsPolicy = "FrontendCorsPolicy";
 
 // API 进程入口：
 // 负责组装 HTTP API、SignalR、日志、中间件、基础设施依赖和实时消息消费者。
 // 当前在原有结构上补充了按 Messaging.Provider 在 RabbitMQ 和 Service Bus 之间切换实时消费者的能力。
-Log.Logger = new LoggerConfiguration()
+var loggerConfiguration = new LoggerConfiguration()
     .Enrich.FromLogContext()
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(
         path: "logs/api-.log",
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 10,
-        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}")
-    .CreateLogger();
+        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}");
+
+if (IsCloudEnvironment())
+{
+    loggerConfiguration.WriteTo.Console(new CompactJsonFormatter());
+}
+else
+{
+    loggerConfiguration.WriteTo.Console(outputTemplate:
+        "[{Timestamp:HH:mm:ss} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}");
+}
+
+Log.Logger = loggerConfiguration.CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -111,5 +121,16 @@ app.MapControllers();
 app.MapHub<JobUpdatesHub>("/hubs/jobs");
 
 app.Run();
+
+static bool IsCloudEnvironment()
+{
+    var environmentName =
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ??
+        Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ??
+        string.Empty;
+
+    return environmentName.Equals("Testbed", StringComparison.OrdinalIgnoreCase) ||
+           environmentName.Equals("Production", StringComparison.OrdinalIgnoreCase);
+}
 
 public partial class Program;

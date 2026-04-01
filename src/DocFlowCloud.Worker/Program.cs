@@ -5,6 +5,7 @@ using DocFlowCloud.Worker;
 using Microsoft.Extensions.Hosting;
 using QuestPDF.Infrastructure;
 using Serilog;
+using Serilog.Formatting.Compact;
 
 // Worker 进程入口：
 // 当前开始支持“本地 RabbitMQ / testbed ServiceBus”双 provider。
@@ -12,16 +13,25 @@ using Serilog;
 // 再按 Messaging.Provider 决定到底启动 RabbitMqWorker 还是 ServiceBusWorker。
 QuestPDF.Settings.License = LicenseType.Community;
 
-Log.Logger = new LoggerConfiguration()
+var loggerConfiguration = new LoggerConfiguration()
     .Enrich.FromLogContext()
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(
         path: "logs/worker-.log",
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 10,
-        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}")
-    .CreateLogger();
+        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}");
+
+if (IsCloudEnvironment())
+{
+    loggerConfiguration.WriteTo.Console(new CompactJsonFormatter());
+}
+else
+{
+    loggerConfiguration.WriteTo.Console(outputTemplate:
+        "[{Timestamp:HH:mm:ss} {Level:u3}] [Corr:{CorrelationId}] {Message:lj}{NewLine}{Exception}");
+}
+
+Log.Logger = loggerConfiguration.CreateLogger();
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -51,3 +61,14 @@ builder.Services.AddSerilog();
 
 var host = builder.Build();
 host.Run();
+
+static bool IsCloudEnvironment()
+{
+    var environmentName =
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ??
+        Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ??
+        string.Empty;
+
+    return environmentName.Equals("Testbed", StringComparison.OrdinalIgnoreCase) ||
+           environmentName.Equals("Production", StringComparison.OrdinalIgnoreCase);
+}
