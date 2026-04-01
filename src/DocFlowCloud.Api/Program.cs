@@ -9,6 +9,7 @@ using DocFlowCloud.Infrastructure.Messaging;
 using DocFlowCloud.Infrastructure.Persistence;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -70,9 +71,15 @@ builder.Services.AddCors(options =>
     });
 });
 
-// 基础健康检查，当前重点检查数据库是否能连接。
+// 基础健康检查：
+// - /health/live 只判断进程本身是否还活着
+// - /health/ready 判断应用是否已经准备好提供服务，当前至少包括数据库可连接
 builder.Services.AddHealthChecks()
-    .AddDbContextCheck<AppDbContext>();
+    .AddCheck(
+        "self",
+        () => HealthCheckResult.Healthy(),
+        tags: ["live"])
+    .AddDbContextCheck<AppDbContext>(tags: ["ready"]);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -112,11 +119,18 @@ app.UseGlobalExceptionMiddleware();
 app.UseSerilogRequestLogging();
 app.UseCors(FrontendCorsPolicy);
 app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new()
+{
+    Predicate = check => check.Tags.Contains("live")
+});
+app.MapHealthChecks("/health/ready", new()
+{
+    Predicate = check => check.Tags.Contains("ready")
+});
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapControllers();
-
 // 前端通过这个 Hub 订阅 Job 状态更新。
 app.MapHub<JobUpdatesHub>("/hubs/jobs");
 
