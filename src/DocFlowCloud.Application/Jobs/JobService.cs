@@ -5,6 +5,7 @@ using DocFlowCloud.Application.Exceptions;
 using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Jobs;
 using DocFlowCloud.Domain.Outbox;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
 namespace DocFlowCloud.Application.Jobs;
@@ -20,17 +21,20 @@ public sealed class JobService
     private readonly ICorrelationContextAccessor _correlationContextAccessor;
     private readonly IFileStorage _fileStorage;
     private readonly IJobRepository _jobRepository;
+    private readonly ILogger<JobService> _logger;
     private readonly IOutboxMessageRepository _outboxMessageRepository;
 
     public JobService(
         ICorrelationContextAccessor correlationContextAccessor,
         IFileStorage fileStorage,
         IJobRepository jobRepository,
+        ILogger<JobService> logger,
         IOutboxMessageRepository outboxMessageRepository)
     {
         _correlationContextAccessor = correlationContextAccessor;
         _fileStorage = fileStorage;
         _jobRepository = jobRepository;
+        _logger = logger;
         _outboxMessageRepository = outboxMessageRepository;
     }
 
@@ -42,6 +46,13 @@ public sealed class JobService
         await _jobRepository.AddAsync(job, cancellationToken);
         await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
         await _jobRepository.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Job created. JobId={JobId}, JobType={JobType}, JobName={JobName}, CorrelationId={CorrelationId}",
+            job.Id,
+            job.Type,
+            job.Name,
+            _correlationContextAccessor.GetCorrelationId());
 
         return job.Id;
     }
@@ -137,6 +148,12 @@ public sealed class JobService
 
         TryChangeState(jobId, () => job.MarkSucceeded(resultJson));
         await _jobRepository.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Job succeeded. JobId={JobId}, JobType={JobType}, CorrelationId={CorrelationId}",
+            job.Id,
+            job.Type,
+            _correlationContextAccessor.GetCorrelationId());
     }
 
     public async Task MarkFailedAsync(Guid jobId, string errorMessage, CancellationToken cancellationToken = default)
@@ -146,6 +163,13 @@ public sealed class JobService
 
         TryChangeState(jobId, () => job.MarkFailed(errorMessage));
         await _jobRepository.SaveChangesAsync(cancellationToken);
+
+        _logger.LogWarning(
+            "Job failed. JobId={JobId}, JobType={JobType}, CorrelationId={CorrelationId}, ErrorMessage={ErrorMessage}",
+            job.Id,
+            job.Type,
+            _correlationContextAccessor.GetCorrelationId(),
+            errorMessage);
     }
 
     public async Task RetryAsync(Guid jobId, CancellationToken cancellationToken = default)
@@ -157,6 +181,13 @@ public sealed class JobService
         TryChangeState(jobId, job.Retry);
         await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
         await _jobRepository.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Job retried. JobId={JobId}, JobType={JobType}, RetryCount={RetryCount}, CorrelationId={CorrelationId}",
+            job.Id,
+            job.Type,
+            job.RetryCount,
+            _correlationContextAccessor.GetCorrelationId());
     }
 
     private async Task AddOutboxMessageAsync(Job job, string correlationId, CancellationToken cancellationToken)
