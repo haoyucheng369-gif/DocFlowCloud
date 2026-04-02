@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using DocFlowCloud.Application.Abstractions.Messaging;
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Abstractions.Processing;
 using DocFlowCloud.Application.Exceptions;
@@ -189,6 +190,7 @@ public sealed class RabbitMqWorker : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var jobMetrics = scope.ServiceProvider.GetRequiredService<IJobMetrics>();
         var executor = scope.ServiceProvider.GetRequiredService<IJobSideEffectExecutor>();
 
         var job = await dbContext.Jobs.FirstOrDefaultAsync(x => x.Id == message.JobId, cancellationToken)
@@ -212,6 +214,7 @@ public sealed class RabbitMqWorker : BackgroundService
         // Job 状态更新 + Inbox 状态更新必须一起提交。
         using var scope = _scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var jobMetrics = scope.ServiceProvider.GetRequiredService<IJobMetrics>();
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
@@ -239,6 +242,8 @@ public sealed class RabbitMqWorker : BackgroundService
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        jobMetrics.JobSucceeded(job.Type);
+        RecordProcessingDuration(job, jobMetrics);
 
         await PublishJobStatusChangedAsync(
             message.JobId,
@@ -303,6 +308,7 @@ public sealed class RabbitMqWorker : BackgroundService
 
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var jobMetrics = scope.ServiceProvider.GetRequiredService<IJobMetrics>();
 
             await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
@@ -326,6 +332,8 @@ public sealed class RabbitMqWorker : BackgroundService
 
             if (job is not null && job.Status == JobStatus.Failed)
             {
+                jobMetrics.JobFailed(job.Type);
+                RecordProcessingDuration(job, jobMetrics);
                 await PublishJobStatusChangedAsync(
                     job.Id,
                     JobStatus.Failed,
@@ -429,6 +437,20 @@ public sealed class RabbitMqWorker : BackgroundService
             routingKey: _settings.DeadLetterQueueName,
             basicProperties: properties,
             body: body);
+    }
+
+    private static void RecordProcessingDuration(Job job, IJobMetrics jobMetrics)
+    {
+        if (job.StartedAtUtc is null || job.CompletedAtUtc is null)
+        {
+            return;
+        }
+
+        var durationSeconds = (job.CompletedAtUtc.Value - job.StartedAtUtc.Value).TotalSeconds;
+        if (durationSeconds >= 0)
+        {
+            jobMetrics.RecordProcessingDuration(job.Type, durationSeconds);
+        }
     }
 
     public override void Dispose()

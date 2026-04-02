@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
 using DocFlowCloud.Application.Abstractions.Messaging;
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Abstractions.Processing;
 using DocFlowCloud.Application.Exceptions;
@@ -234,6 +235,7 @@ public sealed class ServiceBusWorker : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var jobMetrics = scope.ServiceProvider.GetRequiredService<IJobMetrics>();
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
@@ -259,6 +261,8 @@ public sealed class ServiceBusWorker : BackgroundService
 
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        jobMetrics.JobSucceeded(job.Type);
+        RecordProcessingDuration(job, jobMetrics);
 
         await PublishJobStatusChangedAsync(
             message.JobId,
@@ -316,6 +320,7 @@ public sealed class ServiceBusWorker : BackgroundService
 
             using var scope = _scopeFactory.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var jobMetrics = scope.ServiceProvider.GetRequiredService<IJobMetrics>();
 
             await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
 
@@ -339,6 +344,8 @@ public sealed class ServiceBusWorker : BackgroundService
 
             if (job is not null && job.Status == JobStatus.Failed)
             {
+                jobMetrics.JobFailed(job.Type);
+                RecordProcessingDuration(job, jobMetrics);
                 await PublishJobStatusChangedAsync(
                     job.Id,
                     JobStatus.Failed,
@@ -381,5 +388,19 @@ public sealed class ServiceBusWorker : BackgroundService
             nameof(JobStatusChangedIntegrationMessage),
             payloadJson,
             cancellationToken);
+    }
+
+    private static void RecordProcessingDuration(Job job, IJobMetrics jobMetrics)
+    {
+        if (job.StartedAtUtc is null || job.CompletedAtUtc is null)
+        {
+            return;
+        }
+
+        var durationSeconds = (job.CompletedAtUtc.Value - job.StartedAtUtc.Value).TotalSeconds;
+        if (durationSeconds >= 0)
+        {
+            jobMetrics.RecordProcessingDuration(job.Type, durationSeconds);
+        }
     }
 }

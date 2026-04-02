@@ -21,6 +21,7 @@ public sealed class JobService
     private readonly ICorrelationContextAccessor _correlationContextAccessor;
     private readonly IFileStorage _fileStorage;
     private readonly IJobRepository _jobRepository;
+    private readonly IJobMetrics _jobMetrics;
     private readonly ILogger<JobService> _logger;
     private readonly IOutboxMessageRepository _outboxMessageRepository;
 
@@ -28,12 +29,14 @@ public sealed class JobService
         ICorrelationContextAccessor correlationContextAccessor,
         IFileStorage fileStorage,
         IJobRepository jobRepository,
+        IJobMetrics jobMetrics,
         ILogger<JobService> logger,
         IOutboxMessageRepository outboxMessageRepository)
     {
         _correlationContextAccessor = correlationContextAccessor;
         _fileStorage = fileStorage;
         _jobRepository = jobRepository;
+        _jobMetrics = jobMetrics;
         _logger = logger;
         _outboxMessageRepository = outboxMessageRepository;
     }
@@ -46,6 +49,7 @@ public sealed class JobService
         await _jobRepository.AddAsync(job, cancellationToken);
         await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
         await _jobRepository.SaveChangesAsync(cancellationToken);
+        _jobMetrics.JobCreated(job.Type);
 
         _logger.LogInformation(
             "Job created. JobId={JobId}, JobType={JobType}, JobName={JobName}, CorrelationId={CorrelationId}",
@@ -181,6 +185,7 @@ public sealed class JobService
         TryChangeState(jobId, job.Retry);
         await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
         await _jobRepository.SaveChangesAsync(cancellationToken);
+        _jobMetrics.JobRetried(job.Type);
 
         _logger.LogInformation(
             "Job retried. JobId={JobId}, JobType={JobType}, RetryCount={RetryCount}, CorrelationId={CorrelationId}",
