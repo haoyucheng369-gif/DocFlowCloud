@@ -1,8 +1,11 @@
 using DocFlowCloud.Application.Abstractions.Processing;
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Infrastructure;
 using DocFlowCloud.Infrastructure.Messaging;
 using DocFlowCloud.Worker;
 using Microsoft.Extensions.Hosting;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using QuestPDF.Infrastructure;
 using Serilog;
 using Serilog.Formatting.Compact;
@@ -34,6 +37,20 @@ else
 Log.Logger = loggerConfiguration.CreateLogger();
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Services
+    .AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("DocFlowCloud.Worker"))
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddSource(DocFlowCloudTracing.SourceName)
+            .AddHttpClientInstrumentation();
+
+        if (!IsCloudEnvironment())
+        {
+            tracing.AddConsoleExporter();
+        }
+    });
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddScoped<IJobSideEffectExecutor, JobSideEffectExecutor>();

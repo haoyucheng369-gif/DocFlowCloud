@@ -6,6 +6,7 @@ using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Jobs;
 using DocFlowCloud.Domain.Outbox;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace DocFlowCloud.Application.Jobs;
@@ -43,6 +44,11 @@ public sealed class JobService
 
     public async Task<Guid> CreateAsync(CreateJobRequest request, CancellationToken cancellationToken = default)
     {
+        using var activity = DocFlowCloudTracing.ActivitySource.StartActivity("job.create", ActivityKind.Internal);
+        activity?.SetTag("job.type", request.Type);
+        activity?.SetTag("job.name", request.Name);
+        activity?.SetTag("correlation.id", _correlationContextAccessor.GetCorrelationId());
+
         // 创建任务时，Job 和 Outbox 要一起写库，确保“业务记录”和“待发消息”一致。
         var job = new Job(request.Name, request.Type, request.PayloadJson);
 
@@ -50,6 +56,7 @@ public sealed class JobService
         await AddOutboxMessageAsync(job, _correlationContextAccessor.GetCorrelationId(), cancellationToken);
         await _jobRepository.SaveChangesAsync(cancellationToken);
         _jobMetrics.JobCreated(job.Type);
+        activity?.SetTag("job.id", job.Id);
 
         _logger.LogInformation(
             "Job created. JobId={JobId}, JobType={JobType}, JobName={JobName}, CorrelationId={CorrelationId}",

@@ -10,6 +10,8 @@ using DocFlowCloud.Infrastructure.Persistence;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -41,6 +43,21 @@ Log.Logger = loggerConfiguration.CreateLogger();
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog();
+builder.Services
+    .AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("DocFlowCloud.Api"))
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddSource(DocFlowCloudTracing.SourceName)
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation();
+
+        if (!IsCloudEnvironment())
+        {
+            tracing.AddConsoleExporter();
+        }
+    });
 
 // 注册 API 层常规能力：
 // 控制器、SignalR、ProblemDetails、FluentValidation、CorrelationId 访问器。

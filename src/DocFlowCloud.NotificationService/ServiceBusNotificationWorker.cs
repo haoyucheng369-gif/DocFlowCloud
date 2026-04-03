@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Azure.Messaging.ServiceBus;
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Inbox;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog.Context;
+using System.Diagnostics;
 
 namespace DocFlowCloud.NotificationService;
 
@@ -94,6 +96,12 @@ public sealed class ServiceBusNotificationWorker : BackgroundService
 
             using (LogContext.PushProperty("CorrelationId", message.CorrelationId))
             {
+                using var activity = DocFlowCloudTracing.ActivitySource.StartActivity("notification.process-message", ActivityKind.Consumer);
+                activity?.SetTag("job.id", message.JobId);
+                activity?.SetTag("message.id", message.MessageId);
+                activity?.SetTag("message.type", nameof(JobCreatedIntegrationMessage));
+                activity?.SetTag("correlation.id", message.CorrelationId);
+
                 using var scope = _scopeFactory.CreateScope();
                 var inboxRepository = scope.ServiceProvider.GetRequiredService<IInboxMessageRepository>();
                 var sender = scope.ServiceProvider.GetRequiredService<NotificationEmailSender>();

@@ -2,8 +2,11 @@ using DocFlowCloud.Infrastructure;
 using DocFlowCloud.Infrastructure.Messaging;
 using DocFlowCloud.NotificationService;
 using Microsoft.Extensions.Hosting;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Serilog;
 using Serilog.Formatting.Compact;
+using DocFlowCloud.Application.Abstractions.Observability;
 
 // NotificationService 入口：
 // 它是独立消费者，只负责订阅通知类事件并执行通知副作用。
@@ -29,6 +32,20 @@ else
 Log.Logger = loggerConfiguration.CreateLogger();
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Services
+    .AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("DocFlowCloud.NotificationService"))
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddSource(DocFlowCloudTracing.SourceName)
+            .AddHttpClientInstrumentation();
+
+        if (!IsCloudEnvironment())
+        {
+            tracing.AddConsoleExporter();
+        }
+    });
 
 // 复用同一套 Infrastructure，再补充通知发送器。
 builder.Services.AddInfrastructure(builder.Configuration);
