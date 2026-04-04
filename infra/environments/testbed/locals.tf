@@ -1,0 +1,103 @@
+locals {
+  environment                           = "testbed"
+  resource_group_name                   = "rg-${var.project_name}-${local.environment}"
+  log_analytics_name                    = "log-${var.project_name}-${local.environment}"
+  container_app_environment_name        = "cae-${var.project_name}-${local.environment}"
+  sql_server_name                       = "${var.project_name}-${local.environment}-sql"
+  sql_database_name                     = "DocFlowCloudTestbedDb"
+  storage_account_name                  = "stg${var.project_name}${local.environment}"
+  blob_container_name                   = "uploads"
+  service_bus_namespace_name            = "sb-${var.project_name}-${local.environment}"
+  service_bus_topic_name                = "job-events"
+  service_bus_worker_subscription       = "worker"
+  service_bus_notification_subscription = "notification"
+  service_bus_api_realtime_subscription = "api-realtime"
+  key_vault_name                        = "kv-${var.project_name}-${local.environment}"
+  sql_connection_secret_name            = "sql-connection-string"
+  blob_connection_secret_name           = "blob-connection-string"
+  service_bus_connection_secret_name    = "servicebus-connection-string"
+  api_container_app_name                = "${var.project_name}-api-${local.environment}"
+  web_container_app_name                = "${var.project_name}-web-${local.environment}"
+  worker_container_app_name             = "${var.project_name}-worker-${local.environment}"
+  notification_container_app_name       = "${var.project_name}-notification-${local.environment}"
+  migrator_job_name                     = "${var.project_name}-migrator-${local.environment}"
+
+  tags = {
+    environment = local.environment
+    project     = var.project_name
+    managed_by  = "terraform"
+  }
+
+  api_env_vars = {
+    ASPNETCORE_ENVIRONMENT                   = "Testbed"
+    DOTNET_ENVIRONMENT                       = "Testbed"
+    Messaging__Provider                      = "ServiceBus"
+    Storage__Provider                        = "AzureBlob"
+    Storage__AzureBlob__ContainerName        = local.blob_container_name
+    ServiceBus__TopicName                    = local.service_bus_topic_name
+    ServiceBus__WorkerSubscriptionName       = local.service_bus_worker_subscription
+    ServiceBus__NotificationSubscriptionName = local.service_bus_notification_subscription
+    ServiceBus__ApiRealtimeSubscriptionName  = local.service_bus_api_realtime_subscription
+  }
+
+  web_env_vars = {
+    RUNTIME_APP_ENV      = "testbed"
+    RUNTIME_API_BASE_URL = var.web_runtime_api_base_url
+  }
+
+  worker_env_vars = {
+    ASPNETCORE_ENVIRONMENT                   = "Testbed"
+    DOTNET_ENVIRONMENT                       = "Testbed"
+    Messaging__Provider                      = "ServiceBus"
+    Storage__Provider                        = "AzureBlob"
+    Storage__AzureBlob__ContainerName        = local.blob_container_name
+    ServiceBus__TopicName                    = local.service_bus_topic_name
+    ServiceBus__WorkerSubscriptionName       = local.service_bus_worker_subscription
+    ServiceBus__NotificationSubscriptionName = local.service_bus_notification_subscription
+    ServiceBus__ApiRealtimeSubscriptionName  = local.service_bus_api_realtime_subscription
+  }
+
+  notification_env_vars = {
+    ASPNETCORE_ENVIRONMENT                   = "Testbed"
+    DOTNET_ENVIRONMENT                       = "Testbed"
+    Messaging__Provider                      = "ServiceBus"
+    Storage__Provider                        = "AzureBlob"
+    Storage__AzureBlob__ContainerName        = local.blob_container_name
+    ServiceBus__TopicName                    = local.service_bus_topic_name
+    ServiceBus__WorkerSubscriptionName       = local.service_bus_worker_subscription
+    ServiceBus__NotificationSubscriptionName = local.service_bus_notification_subscription
+    ServiceBus__ApiRealtimeSubscriptionName  = local.service_bus_api_realtime_subscription
+  }
+
+  migrator_env_vars = {
+    ASPNETCORE_ENVIRONMENT = "Testbed"
+    DOTNET_ENVIRONMENT     = "Testbed"
+  }
+
+  app_secret_env_vars = {
+    ConnectionStrings__DefaultConnection = local.sql_connection_secret_name
+    Storage__AzureBlob__ConnectionString = local.blob_connection_secret_name
+    ServiceBus__ConnectionString         = local.service_bus_connection_secret_name
+  }
+
+  api_liveness_probe = {
+    transport               = "HTTP"
+    port                    = 8080
+    path                    = "/health/live"
+    interval_seconds        = 10
+    timeout                 = 5
+    failure_count_threshold = 3
+    initial_delay           = 10
+  }
+
+  api_readiness_probe = {
+    transport               = "HTTP"
+    port                    = 8080
+    path                    = "/health/ready"
+    interval_seconds        = 10
+    timeout                 = 5
+    failure_count_threshold = 3
+    success_count_threshold = 1
+    initial_delay           = 10
+  }
+}

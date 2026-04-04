@@ -1,8 +1,8 @@
-# 状态图
+# State Diagrams
 
-这份文档展示当前 `Job` 和 `InboxMessage` 的状态流转。
+This document shows the current state flow for `Job` and `InboxMessage`.
 
-## Job 状态图
+## Job State Diagram
 
 ```mermaid
 stateDiagram-v2
@@ -14,18 +14,18 @@ stateDiagram-v2
     Failed --> Pending: Retry
 ```
 
-## Job 状态含义
+## Job State Meaning
 
 - `Pending`
-  任务已经创建，但还没有处理完成
+  - the job has been created but not completed yet
 - `Processing`
-  某个 Worker 正在处理这个任务
+  - a worker has claimed the job and is processing it
 - `Succeeded`
-  文档已经成功转换成 PDF
+  - the document has been converted successfully
 - `Failed`
-  处理失败，可以进入重试
+  - processing failed; the job may later be retried
 
-## Inbox 状态图
+## Inbox State Diagram
 
 ```mermaid
 stateDiagram-v2
@@ -36,18 +36,18 @@ stateDiagram-v2
     Failed --> Processing: Reclaim
 ```
 
-## Inbox 状态含义
+## Inbox State Meaning
 
 - `Processing`
-  某个消费者已经 claim 了这条消息，当前负责处理
+  - a consumer has claimed the message and is currently handling it
 - `Processed`
-  该消费者已经成功处理完这条消息
+  - the consumer completed handling successfully
 - `Failed`
-  该消费者处理失败，后续可以重试或接管
+  - the consumer failed; the message may later be reclaimed or retried
 
-## 为什么 Job 和 Inbox 分开
+## Why `Job` And `InboxMessage` Are Separate
 
-- `Job` 记录的是业务状态
-- `InboxMessage` 记录的是消息消费状态
-- 一个业务对象在生命周期里可能对应多条消息
-- 去重、claim、超时接管这些语义不应该直接塞进业务实体本身
+- `Job` tracks business state
+- `InboxMessage` tracks consumer-side message processing state
+- one business object may correspond to multiple consumed messages during its lifetime
+- claim, deduplication, stale recovery, and replay semantics do not belong directly inside the business entity itself

@@ -2,6 +2,23 @@
 
 `DocFlowCloud` is an asynchronous document-to-PDF system designed to demonstrate a realistic application architecture across local development, cloud testbed, and production.
 
+## High-Level Shape
+
+```mermaid
+flowchart LR
+    Web[DocFlowCloud.Web] --> Api[DocFlowCloud.Api]
+    Api --> App[DocFlowCloud.Application]
+    App --> Domain[DocFlowCloud.Domain]
+    Api --> Infra[DocFlowCloud.Infrastructure]
+    Worker[DocFlowCloud.Worker] --> App
+    Worker --> Infra
+    Notification[DocFlowCloud.NotificationService] --> App
+    Notification --> Infra
+    Infra --> Sql[(SQL)]
+    Infra --> Storage[(File Storage)]
+    Infra --> Bus[(RabbitMQ / Service Bus)]
+```
+
 ## Layers
 
 ### `DocFlowCloud.Web`
@@ -22,6 +39,7 @@ Responsibilities:
 - create conversion jobs
 - expose job query and result download endpoints
 - host the SignalR hub
+- expose health checks
 - consume realtime status updates in cloud environments
 
 Key files:
@@ -36,12 +54,14 @@ Responsibilities:
 
 - define use cases and orchestration rules
 - define integration messages and contracts
+- expose abstractions for storage, messaging, metrics, and tracing
 - depend on abstractions instead of providers
 
 Key files:
 
 - `src/DocFlowCloud.Application/Jobs/JobService.cs`
-- `src/DocFlowCloud.Application/Messaging/JobCreatedIntegrationMessage.cs`
+- `src/DocFlowCloud.Application/Abstractions/Observability/IJobMetrics.cs`
+- `src/DocFlowCloud.Application/Abstractions/Observability/DocFlowCloudTracing.cs`
 
 ### `DocFlowCloud.Domain`
 
@@ -52,6 +72,13 @@ Responsibilities:
 - define `OutboxMessage`
 - enforce state transitions
 
+Core concepts:
+
+- `JobStatus`
+- retry rules
+- inbox claim / processing state
+- outbox persistence before publish
+
 ### `DocFlowCloud.Infrastructure`
 
 Responsibilities:
@@ -59,6 +86,7 @@ Responsibilities:
 - EF Core persistence
 - local / Azure Blob storage implementations
 - RabbitMQ / Azure Service Bus implementations
+- metrics implementation
 - dependency injection and provider switching
 
 Design note:
@@ -71,6 +99,7 @@ Key files:
 - `src/DocFlowCloud.Infrastructure/DependencyInjection.cs`
 - `src/DocFlowCloud.Infrastructure/Messaging/ServiceBusJobMessagePublisher.cs`
 - `src/DocFlowCloud.Infrastructure/Storage/AzureBlobFileStorage.cs`
+- `src/DocFlowCloud.Infrastructure/Observability/JobMetrics.cs`
 
 ### `DocFlowCloud.Worker`
 
@@ -80,6 +109,7 @@ Responsibilities:
 - consume job messages
 - execute document conversion
 - update job state and result storage
+- recover stale processing
 
 Key files:
 
@@ -147,6 +177,21 @@ Important keys:
 - Stale recovery
   - long-running stuck processing states can be replayed safely
 
+## Observability Baseline
+
+- structured Serilog logs for cloud environments
+- key job lifecycle logs:
+  - created
+  - succeeded
+  - failed
+  - retried
+- API health endpoints:
+  - `/health`
+  - `/health/live`
+  - `/health/ready`
+- metrics instrumentation for job throughput, failures, retries, and duration
+- minimal OpenTelemetry tracing baseline for API, worker, and notification processing
+
 ## Cloud Runtime Model
 
 ### Testbed
@@ -156,6 +201,8 @@ Important keys:
   - `api`
   - `worker`
   - `notification-service`
+- Azure Container Apps Job:
+  - `migrator`
 - Azure SQL Database
 - Azure Blob Storage
 - Azure Service Bus
@@ -167,3 +214,4 @@ Important keys:
 - same runtime shape as testbed
 - validated image tags are promoted from testbed
 - runtime secrets come from Key Vault through managed identity
+- infrastructure shape is intended to be mirrored through Terraform
