@@ -46,6 +46,12 @@ variable "sql_sku_name" {
   default     = "Basic"
 }
 
+variable "sql_storage_account_type" {
+  description = "prod Azure SQL Database 备份存储冗余类型。"
+  type        = string
+  default     = "Geo"
+}
+
 variable "storage_account_tier" {
   description = "prod Storage Account 性能层。"
   type        = string
@@ -56,6 +62,12 @@ variable "storage_account_replication_type" {
   description = "prod Storage Account 副本类型。"
   type        = string
   default     = "LRS"
+}
+
+variable "storage_allow_nested_items_to_be_public" {
+  description = "prod 是否允许存储账户中的嵌套项公开访问。"
+  type        = bool
+  default     = true
 }
 
 variable "service_bus_sku" {
@@ -70,10 +82,76 @@ variable "service_bus_max_delivery_count" {
   default     = 10
 }
 
+variable "service_bus_topic_default_message_ttl" {
+  description = "prod Service Bus topic 默认 TTL。"
+  type        = string
+  default     = "P10675199DT2H48M5.4775807S"
+}
+
+variable "service_bus_topic_enable_batched_operations" {
+  description = "prod Service Bus topic 是否启用 batched operations。"
+  type        = bool
+  default     = false
+}
+
+variable "service_bus_subscription_default_message_ttl" {
+  description = "prod Service Bus subscription 默认 TTL。"
+  type        = string
+  default     = "P10675199DT2H48M5.4775807S"
+}
+
+variable "service_bus_subscription_auto_delete_on_idle" {
+  description = "prod Service Bus subscription 自动删除闲置时间。"
+  type        = string
+  default     = "P10675199DT2H48M5.4775807S"
+}
+
+variable "service_bus_subscription_enable_batched_operations" {
+  description = "prod Service Bus subscription 是否启用 batched operations。"
+  type        = bool
+  default     = false
+}
+
+variable "service_bus_subscription_dead_lettering_on_filter_evaluation_error" {
+  description = "prod Service Bus subscription 过滤规则评估错误时是否死信。"
+  type        = bool
+  default     = true
+}
+
 variable "key_vault_sku_name" {
   description = "prod Key Vault 使用的 SKU。"
   type        = string
   default     = "standard"
+}
+
+variable "key_vault_soft_delete_retention_days" {
+  description = "prod Key Vault 软删除保留天数。"
+  type        = number
+  default     = 7
+}
+
+variable "log_analytics_daily_quota_gb" {
+  description = "prod Log Analytics 每日日志配额，GB。"
+  type        = number
+  default     = -1
+}
+
+variable "log_analytics_local_authentication_enabled" {
+  description = "prod Log Analytics 是否启用本地认证。"
+  type        = bool
+  default     = true
+}
+
+variable "container_app_environment_workload_profile_name" {
+  description = "prod Container Apps Environment workload profile 名称。"
+  type        = string
+  default     = null
+}
+
+variable "container_app_environment_workload_profile_type" {
+  description = "prod Container Apps Environment workload profile 类型。"
+  type        = string
+  default     = null
 }
 
 variable "ghcr_registry_server" {
@@ -109,6 +187,30 @@ variable "api_ingress_transport" {
   description = "prod API ingress transport。"
   type        = string
   default     = "auto"
+}
+
+variable "api_min_replicas" {
+  description = "prod API 最小副本数。"
+  type        = number
+  default     = 1
+}
+
+variable "api_max_replicas" {
+  description = "prod API 最大副本数。"
+  type        = number
+  default     = 1
+}
+
+variable "web_min_replicas" {
+  description = "prod Web 最小副本数。"
+  type        = number
+  default     = 1
+}
+
+variable "web_max_replicas" {
+  description = "prod Web 最大副本数。"
+  type        = number
+  default     = 1
 }
 
 variable "worker_min_replicas" {

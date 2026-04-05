@@ -35,6 +35,12 @@ variable "sku_name" {
   default     = "Basic"
 }
 
+variable "storage_account_type" {
+  description = "SQL Database 备份存储冗余类型。"
+  type        = string
+  default     = "Geo"
+}
+
 variable "tags" {
   description = "统一资源标签。"
   type        = map(string)

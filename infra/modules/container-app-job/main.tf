@@ -5,6 +5,13 @@ resource "azurerm_container_app_job" "this" {
   container_app_environment_id = var.container_app_environment_id
   tags                         = var.tags
 
+  lifecycle {
+    ignore_changes = [
+      secret,
+      workload_profile_name,
+    ]
+  }
+
   dynamic "identity" {
     for_each = var.enable_system_assigned_identity ? [1] : []
     content {
@@ -53,18 +60,14 @@ resource "azurerm_container_app_job" "this" {
       memory = var.memory
 
       dynamic "env" {
-        for_each = var.env_vars
+        for_each = length(var.env_entries) > 0 ? var.env_entries : concat(
+          [for k, v in var.env_vars : { name = k, value = v, secret_name = null }],
+          [for k, v in var.secret_env_vars : { name = k, value = null, secret_name = v }]
+        )
         content {
-          name  = env.key
-          value = env.value
-        }
-      }
-
-      dynamic "env" {
-        for_each = var.secret_env_vars
-        content {
-          name        = env.key
-          secret_name = env.value
+          name        = env.value.name
+          value       = try(env.value.value, null)
+          secret_name = try(env.value.secret_name, null)
         }
       }
     }

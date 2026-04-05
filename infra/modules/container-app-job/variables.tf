@@ -58,6 +58,16 @@ variable "secret_env_vars" {
   default     = {}
 }
 
+variable "env_entries" {
+  description = "按顺序声明的 Job 环境变量列表，用于和现网对齐 env 顺序。"
+  type = list(object({
+    name        = string
+    value       = optional(string)
+    secret_name = optional(string)
+  }))
+  default = []
+}
+
 variable "key_vault_secret_refs" {
   description = "Job 内部的 Key Vault secret 引用，key 是 secret 名称，value 是 Key Vault Secret ID。"
   type        = map(string)

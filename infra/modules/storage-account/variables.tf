@@ -30,6 +30,12 @@ variable "account_replication_type" {
   default     = "LRS"
 }
 
+variable "allow_nested_items_to_be_public" {
+  description = "是否允许存储账户中的嵌套项公开访问。"
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "统一资源标签。"
   type        = map(string)

@@ -89,6 +89,16 @@ variable "secret_env_vars" {
   default     = {}
 }
 
+variable "env_entries" {
+  description = "按顺序声明的环境变量列表，用于和现网对齐 env 顺序。"
+  type = list(object({
+    name        = string
+    value       = optional(string)
+    secret_name = optional(string)
+  }))
+  default = []
+}
+
 variable "key_vault_secret_refs" {
   description = "Container App 内部的 Key Vault secret 引用，key 是 secret 名称，value 是 Key Vault Secret ID。"
   type        = map(string)
@@ -140,6 +150,21 @@ variable "readiness_probe" {
     transport               = string
     port                    = number
     path                    = string
+    interval_seconds        = number
+    timeout                 = number
+    failure_count_threshold = number
+    success_count_threshold = number
+    initial_delay           = number
+  })
+  default = null
+}
+
+variable "startup_probe" {
+  description = "容器 startup probe 配置。未传值时不配置。"
+  type = object({
+    transport               = string
+    port                    = number
+    path                    = optional(string)
     interval_seconds        = number
     timeout                 = number
     failure_count_threshold = number

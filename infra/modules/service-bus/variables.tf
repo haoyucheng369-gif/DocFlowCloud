@@ -45,6 +45,42 @@ variable "max_delivery_count" {
   default     = 10
 }
 
+variable "topic_default_message_ttl" {
+  description = "Topic 默认消息 TTL。"
+  type        = string
+  default     = "P10675199DT2H48M5.4775807S"
+}
+
+variable "topic_enable_batched_operations" {
+  description = "Topic 是否启用 batched operations。"
+  type        = bool
+  default     = false
+}
+
+variable "subscription_default_message_ttl" {
+  description = "Subscription 默认消息 TTL。"
+  type        = string
+  default     = "P10675199DT2H48M5.4775807S"
+}
+
+variable "subscription_auto_delete_on_idle" {
+  description = "Subscription 自动删除闲置时间。"
+  type        = string
+  default     = "P10675199DT2H48M5.4775807S"
+}
+
+variable "subscription_enable_batched_operations" {
+  description = "Subscription 是否启用 batched operations。"
+  type        = bool
+  default     = false
+}
+
+variable "subscription_dead_lettering_on_filter_evaluation_error" {
+  description = "Subscription 过滤规则评估错误时是否死信。"
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "统一资源标签。"
   type        = map(string)

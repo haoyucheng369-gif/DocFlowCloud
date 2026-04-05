@@ -24,6 +24,12 @@ variable "sku_name" {
   default     = "standard"
 }
 
+variable "soft_delete_retention_days" {
+  description = "Key Vault 软删除保留天数。"
+  type        = number
+  default     = 7
+}
+
 variable "tags" {
   description = "统一资源标签。"
   type        = map(string)
