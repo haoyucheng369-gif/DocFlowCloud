@@ -29,9 +29,21 @@ on:
   push:
     branches:
       - test
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "docker-compose.yml"
+      - "DocFlowCloud.sln"
+      - ".github/workflows/docflowcloud-ci-cd.yml"
 
   # Pull requests only run CI checks.
   pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "docker-compose.yml"
+      - "DocFlowCloud.sln"
+      - ".github/workflows/docflowcloud-ci-cd.yml"
 
   # Production promotion is manual and uses a validated image tag from GHCR.
   workflow_dispatch:
