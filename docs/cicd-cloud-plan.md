@@ -1,6 +1,6 @@
 # CI/CD And Cloud Plan
 
-This document defines the first delivery target for DocFlowCloud.
+This document describes the current delivery model for `DocFlowCloud`.
 
 ## Goal
 
@@ -13,30 +13,28 @@ to:
 - automatic build and test
 - Docker image publishing
 - testbed deployment
-- production deployment behind approval
+- production promotion
+- infrastructure as code for Azure runtime shape
 
-## Target Operating Model
+## Current Operating Model
 
 - one repository
-- one system-level GitHub Actions workflow
-- one CI/CD pipeline
-- one branch for test validation:
-  - `test`
-- one branch for production promotion:
-  - `master`
-- two deployment stages:
-  - automatic `testbed`
-  - controlled `production`
+- one application delivery workflow
+- one `test` branch for automatic testbed delivery
+- one `master` branch for controlled production promotion
+- two cloud environments:
+  - `testbed`
+  - `production`
 
-This matches the current repository structure better than splitting pipelines per project.
+This still matches the current repository structure better than splitting pipelines per project.
 
-## What The Workflow Does
+## Application Delivery Workflow
 
-The workflow file is:
+Workflow file:
 
 - `.github/workflows/docflowcloud-ci-cd.yml`
 
-It currently contains five jobs:
+Current logical flow:
 
 1. `build-and-test`
    - restore and build the .NET solution
@@ -52,136 +50,82 @@ It currently contains five jobs:
      - `worker`
      - `notification-service`
      - `migrator`
-   - push backend images to GHCR
-   - runs only for the `test` branch
+   - publish to GHCR
+   - runs for the `test` branch
 
 3. `build-and-push-web-image`
    - build the `web` image
-   - push the web image to GHCR
-   - runs only for the `test` branch
+   - publish to GHCR
+   - runs for the `test` branch
 
 4. `run-testbed-migrator`
-   - runs the existing `migrator` image as a one-off Azure Container Apps Job
-   - applies EF Core migrations to the Azure SQL testbed database
-   - must succeed before `api` and `web` are deployed
+   - detect whether EF migrations changed
+   - run the migrator as an Azure Container Apps Job when needed
 
 5. `deploy-testbed`
-   - first deployment stage
-   - runs automatically after a successful `test` image build
-   - deploys `api` and `web` to Azure Container Apps
-   - injects the real Azure SQL connection string into the API
-   - injects the real Azure Blob connection string and container name into the API
-   - injects runtime configuration into the web container
+   - deploy validated images to Azure Container Apps in testbed
+   - update `web`, `api`, `worker`, and `notification-service`
+   - keep runtime secrets in Key Vault
 
 6. `deploy-production`
-   - second deployment stage
-   - runs only from `master`
-   - requires a manually provided `image_tag`
-   - is intended to stay behind GitHub environment approval
+   - manual production promotion from `master`
+   - operator provides a validated `image_tag`
+   - reuses the same artifact already validated in testbed
+   - runs prod migrator only when migrations changed
 
-## Why GHCR First
+## Delivery Principle
 
-GHCR is a good first registry for this project because:
+This project follows:
 
-- it is simple to integrate with GitHub Actions
-- it keeps pipeline setup lightweight
-- it is enough for portfolio, testbed and first cloud deployment
+- build once
+- validate in testbed
+- promote the same artifact to production
 
-Production can later move to Azure Container Registry if tighter Azure-native integration becomes necessary.
+Production does not rebuild from source during promotion.
 
-## Recommended Azure Target
+## Current Cloud Runtime
 
-For the first cloud deployment, the recommended target is:
+Azure target:
 
-- `Azure Container Apps`
+- Azure Container Apps
+- Azure SQL Database
+- Azure Blob Storage
+- Azure Service Bus
+- Azure Key Vault
+- Managed Identity
 
-Why:
-
-- the system is already containerized
-- multiple services exist already
-- it is simpler than AKS
-- it is more realistic than keeping production-like deployments in local Compose
-
-Planned deployed services:
+Runtime services:
 
 - `web`
 - `api`
 - `worker`
 - `notification-service`
+- `migrator` as a Container Apps Job
 
-The `migrator` image is now used as a one-off migration job in testbed before the API is deployed.
+## Secret Strategy
 
-### First cloud deployment scope
+### Delivery-time secrets
 
-The first real cloud deployment should stay intentionally narrow:
+GitHub environments hold deployment-facing values such as:
 
-- deploy `api`
-- deploy `web`
-- do not deploy `worker` yet
-- do not deploy `notification-service` yet
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
 
-This keeps the first Azure deployment focused on validating:
+### Runtime secrets
 
-- GitHub Actions -> Azure login
-- GHCR -> Azure Container Apps image pull
-- basic `testbed` promotion flow
+Application runtime secrets come from:
 
-To reduce external dependencies in the first pass:
+- Azure Key Vault
+- Container App secret references
+- Managed Identity
 
-- API disables the realtime RabbitMQ consumer in cloud testbed
-- API now reads Azure SQL and Azure Blob settings from testbed environment configuration
+Typical runtime secrets:
 
-This first pass proves deployment mechanics.
-Background services can be added right after.
-
-## Environment Responsibilities
-
-### Development
-
-- local IDE
-- local Docker Compose dev
-- local SQL Server / RabbitMQ / Local storage
-
-### Testbed
-
-- first cloud deployment target
-- separate Azure SQL database
-- separate messaging namespace / vhost
-- separate secrets
-- Azure Blob storage
-
-### Production
-
-- second cloud deployment target
-- separate data stores and secrets
-- protected by approval
-
-## Secrets Strategy
-
-### Current state
-
-Local secrets/config still exist in:
-
-- `appsettings.*.json`
-- `docker-compose.*.yml`
-
-This is acceptable for local development.
-
-### Target state
-
-Sensitive values should move out of the repository.
-
-Recommended storage:
-
-- GitHub repository or environment secrets for pipeline authentication
-- Azure Key Vault for application runtime secrets
-
-Typical secrets:
-
-- Azure login credentials for deployment
-- SQL connection strings
-- Blob connection string or managed identity configuration
-- messaging credentials
+- SQL connection string
+- Blob connection string
+- Service Bus connection string
+- GHCR registry pull credential
 
 ## Branch Strategy
 
@@ -190,86 +134,76 @@ Typical secrets:
 Used for:
 
 - full CI
-- Docker image build
-- GHCR push
+- image build and push
 - automatic deployment to testbed
-
-The image tag used for testbed is the commit SHA of the `test` branch push.
 
 ### `master`
 
 Used for:
 
-- merge of code already validated in testbed
-- production promotion
+- merging code already validated in testbed
+- manual production promotion by `image_tag`
 
-Production should not rebuild a different image.
-It should reuse the exact image tag that already passed through testbed.
+This keeps production controlled while preserving artifact promotion.
 
-Current workflow design:
+## Terraform Boundary
 
-- push to `master` still runs CI
-- production deployment is manual through `workflow_dispatch`
-- the operator provides the already-validated `image_tag`
+Terraform and CI/CD are intentionally separate concerns.
 
-This keeps the first production flow simple while preserving the "build once, deploy many" principle.
+### Terraform manages
 
-## GitHub Environments
+- Azure resource structure
+- Container Apps / Job existence and baseline configuration
+- managed identities
+- Key Vault references
+- probes, scale defaults, ingress defaults, and job execution settings
 
-Create two GitHub environments:
+### CI/CD manages
 
-- `testbed`
-- `production`
+- restore / build / test
+- build and push images
+- testbed deployment cadence
+- production promotion by image tag
 
-Use them for:
+In short:
 
-- scoped secrets
-- deployment history
-- approval rules for production
+- Terraform defines the environment shape
+- CI/CD defines which image version is running now
 
-## Minimum Secrets To Add Later
+## Terraform Status
 
-Repository or environment secrets:
+The repository now includes Terraform structure for:
 
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
+- `infra/environments/testbed`
+- `infra/environments/prod`
 
-Optional variables:
+Current coverage includes:
 
-- `TESTBED_API_BASE_URL`
+- resource group
+- log analytics
+- container apps environment
+- SQL
+- storage
+- service bus
+- key vault
+- container apps:
+  - `api`
+  - `web`
+  - `worker`
+  - `notification`
+- container app job:
+  - `migrator`
+- managed identity
+- key vault secret references
+- GHCR pull auth
+- probes, scale, ingress, and job execution settings
 
-Later, when real deployment is added, also define Azure-side names such as:
-
-- resource group name
-- container app environment name
-- container app names
-
-## What Is Still Placeholder
-
-The workflow is intentionally staged.
-
-Already real:
-
-- build
-- test
-- Docker image build
-- GHCR push
-
-Still placeholder:
-
-- actual production promotion commands using the provided image tag
-- actual Azure Key Vault integration
-- worker and notification-service deployment to Azure Container Apps
-- messaging infrastructure for full async cloud processing
+Remote state backend and dedicated infra workflow are still later-stage enhancements.
 
 ## Recommended Next Implementation Order
 
-1. Push to `test` and confirm CI + GHCR image push works
-2. Create Azure testbed resource group and Container Apps environment
-3. Push to `test` and let the first Azure deployment create/update `api` and `web`
-4. Update `TESTBED_API_BASE_URL` with the real Azure API FQDN and push `test` again
-5. Add `worker` and `notification-service` to testbed
-6. Add Key Vault-backed secrets
-7. Merge validated code to `master`
-8. Run `workflow_dispatch` on `master` with the already-validated image tag to promote to production
+1. Fill real environment values for Terraform local secret files
+2. Run the first real `terraform plan` against `testbed`
+3. Align any remaining Azure-side drift
+4. Optionally add a dedicated infra workflow
+5. Optionally move Terraform state to a remote backend

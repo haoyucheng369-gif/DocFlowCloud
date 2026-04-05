@@ -1,8 +1,10 @@
 using Azure.Messaging.ServiceBus;
 using DocFlowCloud.Application.Abstractions.Messaging;
+using DocFlowCloud.Application.Abstractions.Observability;
 using DocFlowCloud.Application.Abstractions.Persistence;
 using DocFlowCloud.Application.Abstractions.Storage;
 using DocFlowCloud.Infrastructure.Messaging;
+using DocFlowCloud.Infrastructure.Observability;
 using DocFlowCloud.Infrastructure.Persistence;
 using DocFlowCloud.Infrastructure.Persistence.Repositories;
 using DocFlowCloud.Infrastructure.Storage;
@@ -44,6 +46,7 @@ public static class DependencyInjection
         services.AddSingleton(messagingSettings);
         services.AddSingleton(serviceBusSettings);
         services.AddSingleton(storageSettings);
+        services.AddSingleton<IJobMetrics, JobMetrics>();
 
         // RabbitMQ 相关基础设施先继续注册：
         // 本地 Development 仍然需要 RabbitMQ 调试能力，等云上完全切完后再决定要不要进一步拆分注册。

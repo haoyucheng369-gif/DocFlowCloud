@@ -319,6 +319,21 @@ paket-files/
 __pycache__/
 *.pyc
 
+# Terraform 本地变量和缓存文件
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+schema.json
+**/*.auto.tfvars
+**/*.auto.tfvars.json
+**/*.secrets.tfvars
+**/*.secrets.tfvars.json
+
 # Cake - Uncomment if you are using it
 # tools/**
 # !tools/packages.config

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -36,6 +37,12 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
         string correlationId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = DocFlowCloudTracing.ActivitySource.StartActivity("job.side-effect.execute", ActivityKind.Internal);
+        activity?.SetTag("job.id", jobId);
+        activity?.SetTag("job.type", jobType);
+        activity?.SetTag("idempotency.key", idempotencyKey);
+        activity?.SetTag("correlation.id", correlationId);
+
         _logger.LogInformation(
             "Executing external side effect. JobId: {JobId}, JobType: {JobType}, IdempotencyKey: {IdempotencyKey}, CorrelationId: {CorrelationId}",
             jobId,
@@ -75,6 +82,8 @@ public sealed class JobSideEffectExecutor : IJobSideEffectExecutor
             OutputStorageKey = outputStorageKey,
             GeneratedAtUtc = DateTime.UtcNow
         };
+        activity?.SetTag("storage.output.key", outputStorageKey);
+        activity?.SetTag("storage.output.file_name", outputFileName);
 
         _logger.LogInformation(
             "Document to PDF conversion completed. JobId: {JobId}, OutputFileName: {OutputFileName}",

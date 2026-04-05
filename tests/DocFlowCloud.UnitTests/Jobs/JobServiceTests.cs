@@ -6,6 +6,7 @@ using DocFlowCloud.Application.Jobs;
 using DocFlowCloud.Application.Messaging;
 using DocFlowCloud.Domain.Jobs;
 using DocFlowCloud.Domain.Outbox;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
 
 namespace DocFlowCloud.UnitTests.Jobs;
@@ -22,6 +23,8 @@ public sealed class JobServiceTests
             new StubCorrelationContextAccessor(),
             fileStorage,
             repository,
+            new StubJobMetrics(),
+            NullLogger<JobService>.Instance,
             outboxRepository);
 
         var fileBytes = new byte[] { 1, 2, 3, 4 };
@@ -55,6 +58,8 @@ public sealed class JobServiceTests
             new StubCorrelationContextAccessor(),
             fileStorage,
             repository,
+            new StubJobMetrics(),
+            NullLogger<JobService>.Instance,
             new InMemoryOutboxRepository());
 
         var resultBytes = new byte[] { 9, 8, 7, 6 };
@@ -95,6 +100,8 @@ public sealed class JobServiceTests
             new StubCorrelationContextAccessor(),
             new StubFileStorage(),
             new InMemoryJobRepository(),
+            new StubJobMetrics(),
+            NullLogger<JobService>.Instance,
             new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<JobNotFoundException>(() => service.RetryAsync(Guid.NewGuid()));
@@ -111,6 +118,8 @@ public sealed class JobServiceTests
             new StubCorrelationContextAccessor(),
             new StubFileStorage(),
             repository,
+            new StubJobMetrics(),
+            NullLogger<JobService>.Instance,
             new InMemoryOutboxRepository());
 
         await Assert.ThrowsAsync<InvalidJobStateException>(() => service.RetryAsync(job.Id));
@@ -125,6 +134,8 @@ public sealed class JobServiceTests
             new StubCorrelationContextAccessor(),
             new StubFileStorage(),
             repository,
+            new StubJobMetrics(),
+            NullLogger<JobService>.Instance,
             outboxRepository);
 
         var jobId = await service.CreateAsync(new CreateJobRequest
@@ -175,6 +186,29 @@ public sealed class JobServiceTests
         public string GetCorrelationId()
         {
             return "corr-123";
+        }
+    }
+
+    private sealed class StubJobMetrics : IJobMetrics
+    {
+        public void JobCreated(string jobType)
+        {
+        }
+
+        public void JobFailed(string jobType)
+        {
+        }
+
+        public void JobRetried(string jobType)
+        {
+        }
+
+        public void JobSucceeded(string jobType)
+        {
+        }
+
+        public void RecordProcessingDuration(string jobType, double durationSeconds)
+        {
         }
     }
 

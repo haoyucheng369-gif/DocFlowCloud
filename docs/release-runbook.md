@@ -8,6 +8,7 @@ This runbook describes the current image-tag promotion model for `DocFlowCloud`.
   - automatic CI
   - build and push images to GHCR
   - automatic testbed deployment
+  - optional manual `custom_image_tag` when running the workflow on `test`
 - `master`
   - production is promoted manually by `image_tag`
   - production reuses an image tag already validated in testbed
@@ -34,6 +35,32 @@ In this project, the most common tag format is a commit SHA such as:
 
 - `02bba06`
 
+Important note about SHA length:
+
+- Older image builds may exist only with the full 40-character SHA tag.
+- GitHub Actions often shows a shortened 7-character SHA in the run list, but that short value may not exist in GHCR.
+- Example:
+  - short SHA shown in Actions: `d9739c0`
+  - actual existing full tag in GHCR: `d9739c04aff3d082dba9e7d445b7726244f14a7f`
+- If production promotion fails with `MANIFEST_UNKNOWN`, retry with the full SHA.
+- Newer workflows now publish both:
+  - full SHA tags
+  - short SHA tags
+
+Optional custom tag support:
+
+- The default behavior still uses auto-generated SHA tags.
+- If you manually run the workflow on branch `test`, you may also provide:
+  - `custom_image_tag`
+- Example custom tags:
+  - `v1.0.0`
+  - `demo-20260328`
+  - `prod-ready-1`
+- A manual `test` run with `custom_image_tag` publishes:
+  - the normal SHA tags
+  - the custom tag
+  - `testbed-latest`
+
 ## How To Promote Production
 
 1. Open GitHub Actions.
@@ -42,6 +69,13 @@ In this project, the most common tag format is a commit SHA such as:
 4. Choose branch `master`.
 5. Enter the validated `image_tag`.
 6. Start the workflow.
+
+If you want a more human-readable production tag first:
+
+1. Run the workflow manually on branch `test`.
+2. Enter `custom_image_tag`.
+3. Wait for testbed deployment and validation to succeed.
+4. Promote that same tag from branch `master` by entering it as `image_tag`.
 
 Expected production behavior:
 

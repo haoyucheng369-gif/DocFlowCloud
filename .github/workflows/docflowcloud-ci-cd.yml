@@ -1,20 +1,20 @@
 ﻿name: DocFlowCloud CI/CD
 
 # ============================================================
-# 文档说明：
-# 1. test 分支：
-#    - 跑 CI
-#    - 构建并推送镜像
-#    - 自动迁移 testbed 数据库
-#    - 部署 web / api / worker / notification-service 到 Azure testbed
+# Workflow overview:
+# 1. test branch:
+#    - run CI
+#    - build and push images
+#    - migrate the testbed database when needed
+#    - deploy web / api / worker / notification-service to Azure testbed
 #
-# 2. production promote：
-#    - 不再依赖 master push 自动跑 CI
-#    - 通过 workflow_dispatch 手动 promote 已验证镜像
+# 2. production promotion:
+#    - no longer depends on automatic CI from master push
+#    - manually promote a validated image through workflow_dispatch
 #
-# 3. 当前 secret 策略：
-#    - GitHub 只保留 Azure 部署身份和非敏感环境变量
-#    - 应用运行时 secret 由 ACA + Managed Identity + Key Vault 提供
+# 3. current secret strategy:
+#    - GitHub keeps only Azure deployment identity data and non-sensitive variables
+#    - runtime secrets come from ACA + Managed Identity + Key Vault
 # ============================================================
 
 on:
@@ -35,9 +35,26 @@ on:
 
   # Production promotion is manual and uses a validated image tag from GHCR.
   workflow_dispatch:
+    # ------------------------------------------------------------
+    # Manual run modes
+    #
+    # 1. Manual run on the test branch:
+    #    - can provide an extra custom_image_tag
+    #    - useful for publishing a more readable tag (for example v1.0.0 / demo-20260331)
+    #    - the testbed deployment will directly use that custom tag
+    #
+    # 2. Manual run on the master branch:
+    #    - promotes an image_tag that has already been validated in testbed
+    #    - production does not rebuild; it reuses an existing GHCR artifact
+    # ------------------------------------------------------------
     inputs:
       image_tag:
         description: "Existing GHCR image tag to deploy to production"
+        required: false
+        default: ""
+        type: string
+      custom_image_tag:
+        description: "Optional extra image tag when manually building testbed images from the test branch"
         required: false
         default: ""
         type: string
@@ -49,9 +66,9 @@ permissions:
 
 env:
   # ------------------------------------------------------------
-  # 全局构建参数
-  # - .NET / Node 版本
-  # - GHCR registry 命名空间
+  # Global build parameters
+  # - .NET / Node versions
+  # - GHCR registry namespace
   # ------------------------------------------------------------
   DOTNET_VERSION: 10.0.x
   NODE_VERSION: 20
@@ -60,19 +77,23 @@ env:
 
 jobs:
   # ------------------------------------------------------------
-  # 1. 通用 CI
+  # 1. Shared CI stage
   # ------------------------------------------------------------
-  # 所有 PR / test 都会先跑这一段。
-  # 这里只做代码质量校验，不做云部署：
+  # Every PR and test flow starts here.
+  # This stage only validates code quality, without any cloud deployment:
   # - restore
   # - build
   # - unit / integration tests
   # - frontend tests
   # - frontend build
+  #
+  # Additional notes:
+  # - test branch push: runs automatically
+  # - test branch workflow_dispatch: also allowed, mainly to pair with custom_image_tag
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch'
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/test'
 
     steps:
       - name: Checkout repository
@@ -115,10 +136,10 @@ jobs:
         working-directory: src/DocFlowCloud.Web
 
   # ------------------------------------------------------------
-  # 2. 构建并推送镜像
+  # 2. Build and push images
   # ------------------------------------------------------------
-  # 只有 test 分支会产出可部署镜像。
-  # 这些镜像先在 testbed 被验证，通过后才能继续考虑 production promote。
+  # Only the test branch publishes deployable images.
+  # Those images are validated in testbed before they are considered for production promotion.
   build-and-push-backend-images:
     name: Build and push backend images
     runs-on: ubuntu-latest
@@ -151,6 +172,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # Image tag rules
+      #
+      # Each test build publishes:
+      # - full_sha: the full 40-character commit SHA
+      # - short_sha: the short 7-character SHA for easier manual promotion
+      #
+      # This allows production promotion to accept either the full SHA
+      # or the shorter human-friendly SHA.
+      # ------------------------------------------------------------
+      - name: Compute image tags
+        id: image-tags
+        shell: bash
+        run: |
+          echo "full_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -164,7 +202,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.image_name }}
           tags: |
-            type=raw,value=${{ github.sha }}
+            type=raw,value=${{ steps.image-tags.outputs.full_sha }}
+            type=raw,value=${{ steps.image-tags.outputs.short_sha }}
+            type=raw,value=${{ inputs.custom_image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/test' && inputs.custom_image_tag != '' }}
             type=raw,value=testbed-latest
 
       - name: Build and push image
@@ -188,6 +228,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # The web image follows the exact same tag rules as backend images:
+      # - full SHA
+      # - short SHA
+      # - optional custom_image_tag
+      # - testbed-latest
+      # ------------------------------------------------------------
+      - name: Compute image tags
+        id: image-tags
+        shell: bash
+        run: |
+          echo "full_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -201,7 +255,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web
           tags: |
-            type=raw,value=${{ github.sha }}
+            type=raw,value=${{ steps.image-tags.outputs.full_sha }}
+            type=raw,value=${{ steps.image-tags.outputs.short_sha }}
+            type=raw,value=${{ inputs.custom_image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/test' && inputs.custom_image_tag != '' }}
             type=raw,value=testbed-latest
 
       - name: Build and push web image
@@ -216,14 +272,14 @@ jobs:
             VITE_APP_ENV=testbed
 
   # ------------------------------------------------------------
-  # 3. testbed 数据库迁移
+  # 3. Testbed database migration
   # ------------------------------------------------------------
-  # API / worker 启动前必须先保证 Azure SQL schema 已经到位。
-  # 这里复用 migrator 镜像，在 Azure Container Apps Job 里执行一次性迁移。
+  # Azure SQL schema must be ready before API / worker start.
+  # This reuses the migrator image and runs a one-off migration inside an Azure Container Apps Job.
   #
-  # 额外优化：
-  # - 只有 Infrastructure/Migrations 目录有变动时才真正跑 migrator
-  # - 否则直接跳过，避免每次部署都等待数分钟
+  # Optimization:
+  # - run the migrator only when Infrastructure/Migrations changes
+  # - otherwise skip it to avoid adding several minutes to every deployment
   run-testbed-migrator:
     name: Run testbed migrator
     runs-on: ubuntu-latest
@@ -279,7 +335,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           MIGRATOR_JOB_NAME: docflow-migrator-testbed
-          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.sha }}
+          MIGRATOR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-migrator:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
         run: |
           if az containerapp job show --name "$MIGRATOR_JOB_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp job update \
@@ -351,25 +407,25 @@ jobs:
           echo "Skipping testbed migrator to keep deployment fast."
 
   # ------------------------------------------------------------
-  # 4. 部署到 Azure testbed
+  # 4. Deploy to Azure testbed
   # ------------------------------------------------------------
-  # 当前 testbed 已经包含完整云上主链：
+  # The current testbed contains the full cloud runtime chain:
   # - web
   # - api
   # - worker
   # - notification-service
   #
-  # 当前 testbed 运行时基础设施：
+  # Current testbed runtime infrastructure:
   # - Azure SQL
   # - Azure Blob
   # - Azure Service Bus
   # - Key Vault + Managed Identity
   #
-  # 这里 workflow 只负责：
-  # - 部署镜像
-  # - 注入非敏感环境变量
+  # This workflow is responsible only for:
+  # - deploying images
+  # - injecting non-sensitive environment variables
   #
-  # 运行时 secret 不再由 GitHub 明文中转。
+  # Runtime secrets are no longer passed through GitHub in plaintext.
   deploy-testbed:
     name: Deploy to testbed
     runs-on: ubuntu-latest
@@ -412,13 +468,23 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           API_APP_NAME: ${{ vars.TESTBED_API_APP_NAME }}
-          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.sha }}
+          API_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-api:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
           SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
           SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
         run: |
+          # ------------------------------------------------------------
+          # Testbed injects only non-sensitive environment variables.
+          #
+          # SQL / Blob / Service Bus connection strings are not passed through the workflow.
+          # They are resolved directly by Azure Container Apps through:
+          # - Managed Identity
+          # - Key Vault secret references
+          #
+          # This keeps GitHub free of runtime secret plaintext.
+          # ------------------------------------------------------------
           if az containerapp show --name "$API_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp update \
               --name "$API_APP_NAME" \
@@ -472,7 +538,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           WEB_APP_NAME: ${{ vars.TESTBED_WEB_APP_NAME }}
-          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.sha }}
+          WEB_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-web:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           API_BASE_URL: ${{ vars.TESTBED_API_BASE_URL }}
         run: |
           if az containerapp show --name "$WEB_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
@@ -502,13 +568,19 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           WORKER_APP_NAME: docflow-worker-testbed
-          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.sha }}
+          WORKER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-worker:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
           SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
           SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
         run: |
+          # ------------------------------------------------------------
+          # worker / notification 默认保持常驻 1 个副本，
+          # 目的是让 testbed 演示时不需要等待冷启动。
+          #
+          # 如果后面要节省成本，可以把 min-replicas 改成 0。
+          # ------------------------------------------------------------
           if az containerapp show --name "$WORKER_APP_NAME" --resource-group "$RESOURCE_GROUP" > /dev/null 2>&1; then
             az containerapp update \
               --name "$WORKER_APP_NAME" \
@@ -552,7 +624,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.TESTBED_RESOURCE_GROUP }}
           CONTAINER_APPS_ENV: ${{ vars.TESTBED_CONTAINERAPPS_ENV }}
           NOTIFICATION_APP_NAME: docflow-notification-testbed
-          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.sha }}
+          NOTIFICATION_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/docflowcloud-notification-service:${{ github.event_name == 'workflow_dispatch' && inputs.custom_image_tag != '' && inputs.custom_image_tag || github.sha }}
           BLOB_CONTAINER_NAME: ${{ vars.TESTBED_BLOB_CONTAINER_NAME }}
           SERVICEBUS_TOPIC_NAME: ${{ vars.TESTBED_SERVICEBUS_TOPIC_NAME }}
           SERVICEBUS_WORKER_SUBSCRIPTION: ${{ vars.TESTBED_SERVICEBUS_WORKER_SUBSCRIPTION }}
@@ -617,15 +689,15 @@ jobs:
           echo "CI and GHCR image publication still succeeded."
 
   # ------------------------------------------------------------
-  # 5. production promote
+  # 5. Production promotion
   # ------------------------------------------------------------
-  # production 复用已经在 testbed 验证通过的 image tag。
-  # workflow 不重新 build，只负责：
-  # - 按需运行 prod migrator
-  # - 更新 prod api / web / worker / notification-service 镜像
-  # - 注入非敏感配置
+  # Production reuses an image tag that has already been validated in testbed.
+  # The workflow does not rebuild. It only:
+  # - runs the prod migrator when needed
+  # - updates prod api / web / worker / notification-service images
+  # - injects non-sensitive configuration
   #
-  # 运行时 secret 继续由 ACA secret reference + Managed Identity + Key Vault 提供。
+  # Runtime secrets continue to come from ACA secret references + Managed Identity + Key Vault.
   deploy-production:
     name: Deploy to production
     runs-on: ubuntu-latest
@@ -653,6 +725,15 @@ jobs:
         if: steps.production-ready.outputs.ready == 'true'
         shell: bash
         run: |
+          # ------------------------------------------------------------
+          # This does not check testbed migration changes.
+          # It only compares the current master HEAD with the previous commit.
+          #
+          # Purpose:
+          # - if this is only an artifact promotion with no new EF migration,
+          #   do not run the prod migrator unnecessarily
+          # - only execute the database migration when the migration directory truly changed
+          # ------------------------------------------------------------
           CURRENT_SHA=$(git rev-parse HEAD)
           PREVIOUS_SHA=$(git rev-parse HEAD^ 2>/dev/null || echo "")
 
@@ -690,6 +771,15 @@ jobs:
         env:
           RESOURCE_GROUP: ${{ vars.PROD_RESOURCE_GROUP }}
         run: |
+          # ------------------------------------------------------------
+          # The production workflow assumes the infrastructure has already been bootstrapped,
+          # either manually or through IaC:
+          # - prod ACA apps
+          # - prod migrator job
+          #
+          # It does not create production from scratch; it updates an existing production environment.
+          # If those resources do not exist, fail immediately instead of doing a partial deployment.
+          # ------------------------------------------------------------
           for resource_name in \
             docflow-api-prod \
             docflow-web-prod \
@@ -775,6 +865,14 @@ jobs:
           SERVICEBUS_NOTIFICATION_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_NOTIFICATION_SUBSCRIPTION }}
           SERVICEBUS_API_REALTIME_SUBSCRIPTION: ${{ vars.PROD_SERVICEBUS_API_REALTIME_SUBSCRIPTION }}
         run: |
+          # ------------------------------------------------------------
+          # Core production promotion idea:
+          # - do not rebuild
+          # - do not generate new images
+          # - only update production to an image_tag already validated in testbed
+          #
+          # This is a classic artifact promotion / build once, deploy many workflow.
+          # ------------------------------------------------------------
           az containerapp update \
             --name docflow-api-prod \
             --resource-group "$RESOURCE_GROUP" \
