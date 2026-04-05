@@ -214,4 +214,11 @@ Important keys:
 - same runtime shape as testbed
 - validated image tags are promoted from testbed
 - runtime secrets come from Key Vault through managed identity
-- infrastructure shape is intended to be mirrored through Terraform
+- infrastructure shape is defined through Terraform
+
+## Infrastructure Status
+
+- `testbed` has been imported into Terraform state and aligned to zero drift
+- `prod` is modeled in Terraform as a clean create-from-scratch environment
+- Terraform manages resource shape and runtime baseline configuration
+- CI/CD manages image build, push, and deployment version updates

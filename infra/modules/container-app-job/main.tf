@@ -8,6 +8,7 @@ resource "azurerm_container_app_job" "this" {
   lifecycle {
     ignore_changes = [
       secret,
+      template[0].container[0].image,
       workload_profile_name,
     ]
   }

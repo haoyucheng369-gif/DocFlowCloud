@@ -20,8 +20,12 @@ const stackGroups = [
     items: ["ASP.NET Core", "Clean Architecture", "Outbox / Inbox", "Retry / DLQ", "Background Workers"]
   },
   {
-    title: "Quality",
-    items: ["Unit Tests", "Integration Tests", "Health Checks", "Runtime Config", "Realtime Updates"]
+    title: "Cloud and Delivery",
+    items: ["Azure Container Apps", "Azure SQL", "Azure Blob", "Azure Service Bus", "Key Vault", "GitHub Actions", "GHCR", "Terraform"]
+  },
+  {
+    title: "Observability",
+    items: ["Serilog", "Health Checks", "Metrics", "OpenTelemetry", "Realtime Updates"]
   }
 ];
 
@@ -34,12 +38,17 @@ const cloudHighlights = [
   {
     title: "Azure Services",
     description:
-      "Azure Container Apps host web, API, worker, and notification services. Azure SQL, Blob, Service Bus, and Key Vault provide the managed runtime building blocks."
+      "Azure Container Apps host web, API, worker, notification, and a migrator job. Azure SQL, Blob, Service Bus, and Key Vault provide the managed runtime building blocks."
   },
   {
     title: "Identity and Secrets",
     description:
       "Runtime secrets come from Azure Key Vault through Container Apps secret references and managed identities instead of hard-coded appsettings or GitHub secret passthrough."
+  },
+  {
+    title: "Terraform Status",
+    description:
+      "Testbed has already been imported and aligned to zero drift in Terraform, while production is modeled as a clean create-from-scratch environment."
   }
 ];
 
@@ -55,6 +64,11 @@ const deliveryHighlights = [
       "Production does not rebuild. It promotes an image tag that already passed testbed validation, which keeps testbed and production aligned."
   },
   {
+    title: "App and infra split",
+    description:
+      "Application delivery and Terraform validation now run in separate GitHub workflows, so infra changes no longer rebuild the app stack and app changes no longer trigger Terraform checks."
+  },
+  {
     title: "Rollback",
     description:
       "Rollback is the same promote action with an older known-good image tag, which keeps the release model simple and auditable."
@@ -67,6 +81,13 @@ const releaseFlow = [
   ["3", "Publish", "OutboxPublisherWorker forwards the event to Azure Service Bus."],
   ["4", "Process", "Worker converts the document and saves the PDF result."],
   ["5", "Notify", "API pushes the updated status back to the UI through SignalR."]
+] as const;
+
+const deliveryFlow = [
+  ["1", "CI", "Pushes to test run build, tests, and image publication to GHCR."],
+  ["2", "Testbed", "Validated images are deployed to Azure testbed automatically."],
+  ["3", "Promote", "Production reuses a validated image tag instead of rebuilding from source."],
+  ["4", "Infra", "Terraform manages environment shape while a separate workflow validates infra changes."]
 ] as const;
 
 function Panel({
@@ -234,7 +255,7 @@ function DeliveryPanel() {
         </div>
 
         <div className="grid gap-3">
-          {releaseFlow.map(([step, title, description]) => (
+          {deliveryFlow.map(([step, title, description]) => (
             <div
               key={step}
               className="grid grid-cols-[2.25rem_1fr] gap-4 rounded-2xl bg-soft px-4 py-4 ring-1 ring-line"

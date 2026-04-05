@@ -9,6 +9,7 @@ resource "azurerm_container_app" "this" {
     ignore_changes = [
       max_inactive_revisions,
       secret,
+      template[0].container[0].image,
       workload_profile_name,
     ]
   }

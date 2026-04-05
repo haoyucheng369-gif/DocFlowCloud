@@ -11,6 +11,7 @@ DocFlowCloud is a portfolio-style asynchronous document-to-PDF system built to d
 - Azure SQL, Blob, Key Vault, and Container Apps
 - GitHub Actions + GHCR promotion pipeline
 - Terraform-based Azure infrastructure definition
+- split app / infra workflows
 
 ## What It Does
 
@@ -135,6 +136,9 @@ Current Terraform coverage:
 - container app job:
   - migrator
 - managed identity, Key Vault secret references, and GHCR registry auth
+- image drift intentionally ignored in Terraform so CI/CD remains the image source of truth
+- `testbed` imported and aligned to Azure with `terraform plan => No changes`
+- `prod` prepared as create-from-scratch infrastructure with clean `terraform plan`
 
 ## Main Components
 
@@ -210,12 +214,18 @@ The project already covers the main portfolio-grade engineering areas:
 - asynchronous application architecture
 - local and cloud runtime split
 - CI/CD with artifact promotion
+- split application and infrastructure GitHub workflows
 - structured logging, metrics, tracing baseline
 - Terraform-defined Azure infrastructure
 
-The remaining work is mostly rollout and refinement:
+Current rollout state:
 
-- real `terraform plan/apply` against Azure
-- final environment values and secrets
-- optional infra workflow integration
+- `testbed` Terraform has been imported, aligned, and planned to zero drift
+- `prod` Terraform is ready to create a clean environment from scratch once final values are supplied
+
+Remaining work is mostly optional refinement:
+
+- production real values and first real `apply`
+- remote Terraform state backend
+- Terraform plan/apply automation in the infra workflow
 - dashboards, alerts, and deeper cloud observability
