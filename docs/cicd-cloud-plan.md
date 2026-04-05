@@ -28,6 +28,18 @@ to:
 
 This still matches the current repository structure better than splitting pipelines per project.
 
+## Workflow Split
+
+The repository now uses two separate workflow tracks:
+
+- application workflow:
+  - `.github/workflows/docflowcloud-ci-cd.yml`
+  - runs for application-side changes
+- infrastructure workflow:
+  - `.github/workflows/docflowcloud-infra.yml`
+  - runs for `infra/**` changes
+  - currently performs `terraform fmt -check` and `terraform validate`
+
 ## Application Delivery Workflow
 
 Workflow file:
@@ -198,12 +210,16 @@ Current coverage includes:
 - GHCR pull auth
 - probes, scale, ingress, and job execution settings
 
-Remote state backend and dedicated infra workflow are still later-stage enhancements.
+The dedicated infra workflow is now in place for:
+
+- `terraform fmt -check`
+- `terraform validate`
+
+Remote state backend and automated `plan/apply` are still later-stage enhancements.
 
 ## Recommended Next Implementation Order
 
-1. Fill real environment values for Terraform local secret files
-2. Run the first real `terraform plan` against `testbed`
-3. Align any remaining Azure-side drift
-4. Optionally add a dedicated infra workflow
-5. Optionally move Terraform state to a remote backend
+1. Fill final real environment values for `prod`
+2. Run the first real `terraform apply` for `prod` when needed
+3. Optionally extend the infra workflow with `terraform plan`
+4. Optionally move Terraform state to a remote backend
