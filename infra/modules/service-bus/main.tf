@@ -14,31 +14,31 @@ resource "azurerm_servicebus_topic" "job_events" {
 }
 
 resource "azurerm_servicebus_subscription" "worker" {
-  name                                       = var.worker_subscription_name
-  topic_id                                   = azurerm_servicebus_topic.job_events.id
-  max_delivery_count                         = var.max_delivery_count
-  default_message_ttl                        = var.subscription_default_message_ttl
-  auto_delete_on_idle                        = var.subscription_auto_delete_on_idle
-  batched_operations_enabled                 = var.subscription_enable_batched_operations
-  dead_lettering_on_filter_evaluation_error  = var.subscription_dead_lettering_on_filter_evaluation_error
+  name                                      = var.worker_subscription_name
+  topic_id                                  = azurerm_servicebus_topic.job_events.id
+  max_delivery_count                        = var.max_delivery_count
+  default_message_ttl                       = var.subscription_default_message_ttl
+  auto_delete_on_idle                       = var.subscription_auto_delete_on_idle
+  batched_operations_enabled                = var.subscription_enable_batched_operations
+  dead_lettering_on_filter_evaluation_error = var.subscription_dead_lettering_on_filter_evaluation_error
 }
 
 resource "azurerm_servicebus_subscription" "notification" {
-  name                                       = var.notification_subscription_name
-  topic_id                                   = azurerm_servicebus_topic.job_events.id
-  max_delivery_count                         = var.max_delivery_count
-  default_message_ttl                        = var.subscription_default_message_ttl
-  auto_delete_on_idle                        = var.subscription_auto_delete_on_idle
-  batched_operations_enabled                 = var.subscription_enable_batched_operations
-  dead_lettering_on_filter_evaluation_error  = var.subscription_dead_lettering_on_filter_evaluation_error
+  name                                      = var.notification_subscription_name
+  topic_id                                  = azurerm_servicebus_topic.job_events.id
+  max_delivery_count                        = var.max_delivery_count
+  default_message_ttl                       = var.subscription_default_message_ttl
+  auto_delete_on_idle                       = var.subscription_auto_delete_on_idle
+  batched_operations_enabled                = var.subscription_enable_batched_operations
+  dead_lettering_on_filter_evaluation_error = var.subscription_dead_lettering_on_filter_evaluation_error
 }
 
 resource "azurerm_servicebus_subscription" "api_realtime" {
-  name                                       = var.api_realtime_subscription_name
-  topic_id                                   = azurerm_servicebus_topic.job_events.id
-  max_delivery_count                         = var.max_delivery_count
-  default_message_ttl                        = var.subscription_default_message_ttl
-  auto_delete_on_idle                        = var.subscription_auto_delete_on_idle
-  batched_operations_enabled                 = var.subscription_enable_batched_operations
-  dead_lettering_on_filter_evaluation_error  = var.subscription_dead_lettering_on_filter_evaluation_error
+  name                                      = var.api_realtime_subscription_name
+  topic_id                                  = azurerm_servicebus_topic.job_events.id
+  max_delivery_count                        = var.max_delivery_count
+  default_message_ttl                       = var.subscription_default_message_ttl
+  auto_delete_on_idle                       = var.subscription_auto_delete_on_idle
+  batched_operations_enabled                = var.subscription_enable_batched_operations
+  dead_lettering_on_filter_evaluation_error = var.subscription_dead_lettering_on_filter_evaluation_error
 }
