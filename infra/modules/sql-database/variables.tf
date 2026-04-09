@@ -41,6 +41,16 @@ variable "storage_account_type" {
   default     = "Geo"
 }
 
+variable "min_capacity" {
+  type    = number
+  default = null
+}
+
+variable "auto_pause_delay_in_minutes" {
+  type    = number
+  default = null
+}
+
 variable "tags" {
   description = "统一资源标签。"
   type        = map(string)

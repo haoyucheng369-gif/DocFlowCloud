@@ -16,9 +16,11 @@ resource "azurerm_mssql_server" "this" {
 }
 
 resource "azurerm_mssql_database" "this" {
-  name                 = var.database_name
-  server_id            = azurerm_mssql_server.this.id
-  sku_name             = var.sku_name
-  storage_account_type = var.storage_account_type
-  tags                 = var.tags
+  name                        = var.database_name
+  server_id                   = azurerm_mssql_server.this.id
+  sku_name                    = var.sku_name
+  storage_account_type        = var.storage_account_type
+  min_capacity                = var.min_capacity
+  auto_pause_delay_in_minutes = var.auto_pause_delay_in_minutes
+  tags                        = var.tags
 }
