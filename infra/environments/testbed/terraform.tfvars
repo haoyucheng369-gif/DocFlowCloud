@@ -1,9 +1,11 @@
 project_name = "docflow"
 location     = "francecentral"
 
-sql_administrator_login  = "docflowadmin"
-sql_sku_name             = "GP_S_Gen5_2"
-sql_storage_account_type = "Local"
+sql_administrator_login         = "docflowadmin"
+sql_sku_name                    = "GP_S_Gen5_2"
+sql_storage_account_type        = "Local"
+sql_min_capacity                = 0.5
+sql_auto_pause_delay_in_minutes = 60
 
 storage_account_tier                    = "Standard"
 storage_account_replication_type        = "LRS"

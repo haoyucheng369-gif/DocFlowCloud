@@ -38,6 +38,8 @@ module "sql_database" {
   administrator_login_password = var.sql_administrator_login_password
   sku_name                     = var.sql_sku_name
   storage_account_type         = var.sql_storage_account_type
+  min_capacity                 = var.sql_min_capacity
+  auto_pause_delay_in_minutes  = var.sql_auto_pause_delay_in_minutes
   tags                         = local.tags
 }
 
@@ -215,7 +217,7 @@ module "migrator_job" {
   registry_username               = var.ghcr_registry_username
   registry_password               = var.ghcr_registry_password
   env_entries                     = local.migrator_env_entries
-  enable_system_assigned_identity = false
+  enable_system_assigned_identity = true
   parallelism                     = var.migrator_parallelism
   replica_timeout_in_seconds      = var.migrator_replica_timeout_in_seconds
   replica_retry_limit             = var.migrator_replica_retry_limit
@@ -244,7 +246,7 @@ resource "azurerm_role_assignment" "notification_key_vault_secrets_user" {
 }
 
 resource "azurerm_role_assignment" "migrator_key_vault_secrets_user" {
-  count                = module.migrator_job.principal_id == null ? 0 : 1
+  count                = 1
   scope                = module.key_vault.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = module.migrator_job.principal_id

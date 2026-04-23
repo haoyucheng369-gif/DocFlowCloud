@@ -52,6 +52,16 @@ variable "sql_storage_account_type" {
   default     = "Geo"
 }
 
+variable "sql_min_capacity" {
+  type    = number
+  default = null
+}
+
+variable "sql_auto_pause_delay_in_minutes" {
+  type    = number
+  default = null
+}
+
 variable "storage_account_tier" {
   description = "testbed Storage Account 性能层。"
   type        = string
